@@ -59,7 +59,7 @@ def inspect(
     """Print every table Docling extracts from a statement, with headers and a preview."""
     from pdf_to_csv.docling_client import parse_pdf_to_tables
     from pdf_to_csv.ingest import (
-        HeicConversionError, accepted_types_label, is_supported, normalize_for_docling,
+        IngestError, accepted_types_label, is_supported, normalize_for_docling,
     )
 
     if not is_supported(pdf):
@@ -69,11 +69,11 @@ def inspect(
         )
         raise typer.Exit(code=2)
 
-    # HEIC conversion in a temp dir if needed; no-op for everything else.
+    # HEIC → JPEG + oversized-image downscale if needed; no-op for everything else.
     with tempfile.TemporaryDirectory(prefix="pdf_to_csv_inspect_") as td:
         try:
             docling_path = normalize_for_docling(pdf, work_dir=Path(td))
-        except HeicConversionError as exc:
+        except IngestError as exc:
             typer.secho(str(exc), fg=typer.colors.RED)
             raise typer.Exit(code=2) from exc
         typer.echo(f"Parsing: {pdf}")
@@ -130,7 +130,7 @@ def extract(
     # Lazy imports — keep --help fast, keep tests cheap.
     from pdf_to_csv.docling_client import build_converter
     from pdf_to_csv.ingest import (
-        HeicConversionError, accepted_types_label, is_supported, normalize_for_docling,
+        IngestError, accepted_types_label, is_supported, normalize_for_docling,
     )
     from pdf_to_csv.pipeline import PdfJob, extract_transactions_from_many
 
@@ -158,7 +158,7 @@ def extract(
         for f in files:
             try:
                 docling_path = normalize_for_docling(f, work_dir=work_dir)
-            except HeicConversionError as exc:
+            except IngestError as exc:
                 typer.secho(f"  {f.name}: {exc}", fg=typer.colors.RED)
                 raise typer.Exit(code=2) from exc
             jobs.append(PdfJob(path=docling_path, original_filename=f.name))

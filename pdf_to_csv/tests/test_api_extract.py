@@ -322,6 +322,14 @@ def test_extract_accepts_heic_and_converts_to_jpeg(
 
 
 def test_extract_accepts_jpg_and_png(client: TestClient, stub_pipeline) -> None:
+    # Build real (small) images so ingest.normalize_for_docling's size check
+    # can decode them. Tiny dimensions → passthrough (under the 2500 px cap).
+    from PIL import Image as _Image
+    jpg_buf = io.BytesIO()
+    _Image.new("RGB", (400, 300), (240, 240, 240)).save(jpg_buf, format="JPEG")
+    png_buf = io.BytesIO()
+    _Image.new("RGB", (400, 300), (200, 200, 200)).save(png_buf, format="PNG")
+
     stub_pipeline({
         "photo.jpg": ("generic_table", [_txn("2025-03-27", "-4.25", "STARBUCKS")], None),
         "scan.png": ("generic_table", [_txn("2025-03-28", "-60.00", "SHELL")], None),
@@ -329,8 +337,8 @@ def test_extract_accepts_jpg_and_png(client: TestClient, stub_pipeline) -> None:
     r = client.post(
         "/extract",
         files=[
-            ("files", ("photo.jpg", b"\xff\xd8\xff\xd9", "image/jpeg")),
-            ("files", ("scan.png", b"\x89PNG\r\n\x1a\n", "image/png")),
+            ("files", ("photo.jpg", jpg_buf.getvalue(), "image/jpeg")),
+            ("files", ("scan.png", png_buf.getvalue(), "image/png")),
         ],
     )
     assert r.status_code == 200, r.text

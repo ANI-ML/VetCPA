@@ -82,17 +82,17 @@ def test_normalize_passthrough_for_pdf(tmp_path: Path) -> None:
     assert normalize_for_docling(pdf, work_dir=tmp_path) == pdf
 
 
-def test_normalize_passthrough_for_jpg(tmp_path: Path) -> None:
+def test_normalize_passthrough_for_small_jpg(tmp_path: Path) -> None:
+    # Small, within the size cap — helper should return the original path
+    # without opening/re-saving.
     jpg = tmp_path / "photo.jpg"
-    # Write a minimal valid-ish JPEG. Content doesn't matter; we just need
-    # the helper to skip the HEIC branch entirely.
-    jpg.write_bytes(b"\xff\xd8\xff\xd9")
+    Image.new("RGB", (800, 600), color=(100, 150, 200)).save(jpg, format="JPEG")
     assert normalize_for_docling(jpg, work_dir=tmp_path) == jpg
 
 
-def test_normalize_passthrough_for_png(tmp_path: Path) -> None:
+def test_normalize_passthrough_for_small_png(tmp_path: Path) -> None:
     png = tmp_path / "photo.png"
-    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    Image.new("RGB", (800, 600), color=(100, 150, 200)).save(png, format="PNG")
     assert normalize_for_docling(png, work_dir=tmp_path) == png
 
 
@@ -137,3 +137,56 @@ def test_normalize_raises_on_unreadable_heic(tmp_path: Path) -> None:
 
     with pytest.raises(HeicConversionError):
         normalize_for_docling(bad, work_dir=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Oversized non-HEIC images are downscaled to protect Docling from bomb check
+# ---------------------------------------------------------------------------
+
+def test_normalize_resizes_oversized_png(tmp_path: Path) -> None:
+    # Build a PNG whose longest edge is well above the 2500px cap. Docling's
+    # image pipeline upscales ~9x internally and would otherwise trip PIL's
+    # decompression-bomb guard on a 24MP phone photo.
+    big = tmp_path / "huge.png"
+    Image.new("RGB", (4284, 5712), color=(180, 180, 180)).save(big)
+
+    work = tmp_path / "work"
+    work.mkdir()
+
+    out = normalize_for_docling(big, work_dir=work)
+
+    # Should have been resized into work_dir as a JPEG with scaled dimensions.
+    assert out != big
+    assert out.parent == work
+    assert out.suffix == ".jpg"
+    with Image.open(out) as converted:
+        assert max(converted.size) == 2500
+        # Aspect ratio preserved (4284:5712 == ~3:4).
+        assert converted.size[0] < converted.size[1]
+
+
+def test_normalize_passes_small_image_through_unchanged(tmp_path: Path) -> None:
+    # Image already within the size cap — skip the round-trip through PIL.
+    small = tmp_path / "small.jpg"
+    Image.new("RGB", (1000, 800), color=(200, 100, 50)).save(small, format="JPEG")
+    work = tmp_path / "work"
+    work.mkdir()
+
+    # A PNG-signature hack won't do here since we'd need a real image to
+    # peek at. Small JPEG suffices.
+    assert normalize_for_docling(small, work_dir=work) == small
+
+
+def test_normalize_resizes_oversized_heic(tmp_path: Path) -> None:
+    # Whole reason this layer exists: a 24+ MP iPhone HEIC should land as a
+    # 2500px-long-edge JPEG.
+    heic = tmp_path / "iphone.heic"
+    _write_heic_fixture(heic, size=(4284, 5712))
+    work = tmp_path / "work"
+    work.mkdir()
+
+    out = normalize_for_docling(heic, work_dir=work)
+
+    assert out.suffix == ".jpg"
+    with Image.open(out) as img:
+        assert max(img.size) == 2500

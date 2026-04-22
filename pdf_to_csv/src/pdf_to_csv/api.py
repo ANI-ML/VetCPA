@@ -51,7 +51,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pdf_to_csv.account_type import AccountType
 from pdf_to_csv.docling_client import build_converter
 from pdf_to_csv.ingest import (
-    HeicConversionError,
+    IngestError,
     accepted_types_label,
     is_supported,
     normalize_for_docling,
@@ -213,11 +213,12 @@ async def extract(
                 raise HTTPException(status_code=400, detail=f"{f.filename} is empty.")
             dest.write_bytes(content)
 
-            # HEIC / HEIF → JPEG in the same temp dir. For every other supported
-            # format, `normalize_for_docling` is a no-op.
+            # HEIC → JPEG, oversized images → resized JPEG, PDFs / small
+            # images pass through. Either IngestError subclass surfaces a
+            # user-safe message.
             try:
                 docling_path = normalize_for_docling(dest, work_dir=work_dir)
-            except HeicConversionError as exc:
+            except IngestError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             # An empty-string title entry counts as "use the default."

@@ -29,7 +29,7 @@ env/
 .claude/
 
 # Samples + outputs (sensitive financial data stays out of git)
-pdf_to_csv/samples/*.pdf
+pdf_to_csv/samples/*
 !pdf_to_csv/samples/.gitkeep
 pdf_to_csv/out/
 *.csv
