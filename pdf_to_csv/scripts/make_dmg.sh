@@ -18,7 +18,7 @@ fi
 
 VERSION="$(
   .venv/bin/python -c "import pdf_to_csv; print(pdf_to_csv.__version__)" 2>/dev/null \
-    || echo "0.1.0"
+    || echo "0.1.1"
 )"
 DMG="dist/VetCPA-${VERSION}.dmg"
 STAGE="dist/dmg-stage"

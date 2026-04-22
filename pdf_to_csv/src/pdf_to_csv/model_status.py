@@ -39,18 +39,20 @@ RECHECK_MIN_INTERVAL_S: float = 1.0  # avoid repeated du -sh-style scans on hot-
 
 
 def _default_cache_dirs() -> list[Path]:
-    """Where Docling's models might live. Ordered most-specific first so a
-    bundled-models build short-circuits the generic ~/.cache lookup."""
+    """Where Docling's models live.
+
+    Intentionally *only* looks at `~/.cache/docling/` (plus the bundled path
+    when set). Earlier versions also counted `~/.cache/huggingface/`, but
+    that cache is shared with every other HF-using app on the machine —
+    counting it inflated our "percent downloaded" on systems that already
+    had gigabytes of unrelated HF models, which made the progress bar
+    report nonsense numbers.
+    """
     bundled = os.environ.get("DOCLING_ARTIFACTS_PATH")
     out: list[Path] = []
     if bundled:
         out.append(Path(bundled).expanduser())
-    home = Path.home()
-    out.extend([
-        home / ".cache" / "docling",
-        # HuggingFace stashes its own cache; Docling's models ride on top.
-        home / ".cache" / "huggingface",
-    ])
+    out.append(Path.home() / ".cache" / "docling")
     return out
 
 

@@ -824,6 +824,9 @@
       } catch (e) {
         stopProgress();
         stopModelPolling();
+        // If extract failed we can't report a reliable model-ready state,
+        // so hide the banner entirely rather than leave it half-filled.
+        modelBanner.classList.add("hidden");
         setStatus(`Error: ${e.message || e}`, true);
       } finally {
         submitBtn.disabled = state.entries.length === 0;
@@ -1249,12 +1252,12 @@
       if (modelPoll) { clearInterval(modelPoll); modelPoll = null; }
     }
 
-    // Page-load probe: if models aren't there yet, surface the banner in
-    // "Preparing" mode before the user even clicks Extract, so the first
-    // thing they see is an explanation.
+    // Page-load probe: just record whether models are already cached. We
+    // intentionally DON'T surface the banner until the user clicks Extract —
+    // showing a half-full progress bar at page load (when no download is
+    // actually running) made users think the app was stuck.
     fetchModelStatus().then(s => {
-      if (s && s.ready) { modelsReady = true; return; }
-      if (s) paintModelBanner(s, { downloading: false });
+      if (s && s.ready) modelsReady = true;
     });
 
     // Live progress: shows a spinner + elapsed-seconds counter while a

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdf-to-csv"
-version = "0.1.1"
+version = "0.1.2"
 description = "Convert bank and credit card statement PDFs into a unified CSV/Excel format using Docling."
 readme = "README.md"
 requires-python = ">=3.11"

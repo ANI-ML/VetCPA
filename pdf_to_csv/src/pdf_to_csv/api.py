@@ -83,7 +83,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="pdf-to-csv",
-    version="0.1.0",
+    version="0.1.2",
     description=(
         "Convert bank/credit-card statement PDFs into a unified CSV/Excel. "
         "Upload PDFs to /extract; choose response shape with ?format="
