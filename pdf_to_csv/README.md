@@ -1,5 +1,18 @@
 # VetCPA
 
+## ⬇️ Download & install
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| 🍎 **macOS** (Intel or Apple Silicon) | [**VetCPA-0.1.0.dmg**](https://github.com/ANI-ML/VetCPA/releases/download/v0.1.0/VetCPA-0.1.0.dmg) | ~338 MB |
+| 🪟 **Windows 10 / 11** (64-bit) | [**VetCPA-windows-0.1.0.zip**](https://github.com/ANI-ML/VetCPA/releases/download/v0.1.0/VetCPA-windows-0.1.0.zip) | ~315 MB |
+
+See [all releases](https://github.com/ANI-ML/VetCPA/releases) · [detailed install steps](#install) · [uninstall](#uninstall)
+
+> **First launch:** VetCPA downloads ~1.5 GB of OCR models from HuggingFace. A progress bar shows the download — you'll know it's working. Every launch after that is fully offline.
+
+---
+
 **Bank-statement extraction for accountants — runs entirely on the user's own device.**
 
 VetCPA turns bank and credit-card statements (PDFs, scans, or phone photos) into a single clean CSV the accountant can hand to a ledger or spreadsheet. Every row is tagged with which statement it came from and which parser produced it, so corrections are easy to spot and easy to make.
