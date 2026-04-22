@@ -3,16 +3,20 @@
 Convert bank and credit-card statement PDFs into a unified CSV/Excel file for an accountant.
 Built as a pilot for VetCPA (ANIML).
 
-Uses [Docling](https://github.com/DS4SD/docling) to extract tables from PDFs, then an ordered registry of bank-specific parsers (plus a universal fallback) normalizes each transaction into the canonical schema:
+Uses [Docling](https://github.com/DS4SD/docling) to extract tables from PDFs, then an ordered registry of bank-specific parsers (plus a universal fallback) normalizes each transaction into the canonical schema. Statement-level metadata leads so the CSV reads as groups when sorted:
 
-| Column      | Description                                                 |
-| ----------- | ----------------------------------------------------------- |
-| Date        | Transaction date, ISO `YYYY-MM-DD`                          |
-| Amount      | Signed decimal; **negative = payment/credit**               |
-| Payee       | Cleaned payee/merchant name                                 |
-| Description | Full transaction description (including any FX sub-line)    |
-| Reference   | Bank-supplied reference number, if available                |
-| CheckNumber | Cheque number, if available                                 |
+| Column          | Description                                                            |
+| --------------- | ---------------------------------------------------------------------- |
+| StatementTitle  | User-provided title for the statement (defaults to filename)           |
+| AccountType     | `visa` / `mastercard` / `amex` / `chequing` / `savings` / `other`      |
+| Date            | Transaction date, ISO `YYYY-MM-DD`                                     |
+| Amount          | Signed decimal; **negative = payment/credit**                          |
+| Payee           | Cleaned payee/merchant name                                            |
+| Description     | Full transaction description (including any FX sub-line)               |
+| Reference       | Bank-supplied reference number, if available                           |
+| CheckNumber     | Cheque number, if available                                            |
+
+Rows are sorted by `(StatementTitle, Date)` so statements appear as grouped blocks in the output. `AccountType` is auto-detected from the PDF text when the user doesn't pick one from the dropdown.
 
 Three ways to use it — **CLI** for batch jobs, **drag-and-drop web UI** at `/`, and **JSON/CSV/Excel HTTP API** at `/extract`.
 

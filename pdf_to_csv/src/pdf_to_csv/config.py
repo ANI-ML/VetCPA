@@ -12,7 +12,11 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Settings:
     # Output schema column order — used by the pipeline and CSV/Excel writers.
+    # Statement-level metadata leads so the CSV reads naturally when grouped
+    # by statement (accountants scan the title/type first, then the txn detail).
     output_columns: tuple[str, ...] = (
+        "StatementTitle",
+        "AccountType",
         "Date",
         "Amount",
         "Payee",

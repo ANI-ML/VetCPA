@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from pdf_to_csv import pipeline as pipeline_module
+from pdf_to_csv.account_type import AccountType
 from pdf_to_csv.docling_client import ExtractedTable, ParsedPDF
 from pdf_to_csv.models import TransactionRow
 from pdf_to_csv.pipeline import (
@@ -85,6 +86,8 @@ def test_detect_bank_parser_raises_when_nothing_matches() -> None:
 def test_transactions_to_dataframe_respects_canonical_column_order() -> None:
     txns = [
         TransactionRow(
+            StatementTitle="March Visa",
+            AccountType=AccountType.VISA,
             Date=date(2025, 3, 27),
             Amount=Decimal("-4.25"),
             Payee="STARBUCKS",
@@ -95,6 +98,8 @@ def test_transactions_to_dataframe_respects_canonical_column_order() -> None:
     ]
     df = transactions_to_dataframe(txns)
     assert list(df.columns) == [
+        "StatementTitle",
+        "AccountType",
         "Date",
         "Amount",
         "Payee",
@@ -102,6 +107,8 @@ def test_transactions_to_dataframe_respects_canonical_column_order() -> None:
         "Reference",
         "CheckNumber",
     ]
+    assert df.iloc[0]["StatementTitle"] == "March Visa"
+    assert df.iloc[0]["AccountType"] == "visa"
     assert df.iloc[0]["Date"] == "2025-03-27"
     assert df.iloc[0]["Amount"] == "-4.25"
 
@@ -110,8 +117,39 @@ def test_transactions_to_dataframe_empty_input_returns_empty_canonical_shape() -
     df = transactions_to_dataframe([])
     assert df.empty
     assert list(df.columns) == [
+        "StatementTitle", "AccountType",
         "Date", "Amount", "Payee", "Description", "Reference", "CheckNumber",
     ]
+
+
+def test_transactions_to_dataframe_sorts_rows_by_statement_then_date() -> None:
+    # Interleave two statements; output should group them by StatementTitle
+    # and then sort by Date within each group.
+    txns = [
+        _make_txn("March Visa", AccountType.VISA, "2025-03-28", "-60.00", "SHELL"),
+        _make_txn("March Amex", AccountType.AMEX, "2025-03-27", "-9.99", "SPOTIFY"),
+        _make_txn("March Visa", AccountType.VISA, "2025-03-27", "-4.25", "STARBUCKS"),
+        _make_txn("March Amex", AccountType.AMEX, "2025-03-28", "-12.00", "NETFLIX"),
+    ]
+    df = transactions_to_dataframe(txns)
+    assert df["StatementTitle"].tolist() == [
+        "March Amex", "March Amex", "March Visa", "March Visa",
+    ]
+    # Within each title, dates should be ascending.
+    amex_dates = df[df["StatementTitle"] == "March Amex"]["Date"].tolist()
+    visa_dates = df[df["StatementTitle"] == "March Visa"]["Date"].tolist()
+    assert amex_dates == sorted(amex_dates)
+    assert visa_dates == sorted(visa_dates)
+
+
+def _make_txn(title, account_type, d, amt, desc):
+    y, m, dd = (int(x) for x in d.split("-"))
+    return TransactionRow(
+        StatementTitle=title, AccountType=account_type,
+        Date=date(y, m, dd), Amount=Decimal(amt),
+        Payee=desc.split()[0], Description=desc,
+        Reference="", CheckNumber="",
+    )
 
 
 def test_transactions_to_dataframe_with_source_adds_audit_columns() -> None:
@@ -196,6 +234,70 @@ def test_extract_from_many_dedupe_off_keeps_duplicates(monkeypatch: pytest.Monke
     })
     df, _ = extract_transactions_from_many([pdf], dedupe=False)
     assert len(df) == 2
+
+
+def test_pdfjob_from_any_normalizes_paths() -> None:
+    from pdf_to_csv.pipeline import PdfJob
+    p = Path("/tmp/x.pdf")
+    assert PdfJob.from_any(p).path == p
+    assert PdfJob.from_any("/tmp/y.pdf").path == Path("/tmp/y.pdf")
+    existing = PdfJob(path=p, title="custom", account_type=AccountType.AMEX)
+    assert PdfJob.from_any(existing) is existing  # passthrough
+
+
+def test_extract_from_pdf_uses_provided_title_and_account_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """User-provided metadata must win over filename-stem / auto-detect."""
+    from pdf_to_csv.pipeline import PdfJob, extract_transactions_from_pdf
+    pdf = tmp_path / "random_filename.pdf"
+    pdf.write_bytes(b"")
+
+    # Stub Docling + parser to always return one row.
+    monkeypatch.setattr(
+        pipeline_module, "parse_pdf",
+        lambda path, **kw: ParsedPDF(tables=[], text="This is a Scotiabank Visa card"),
+    )
+    class FakeParser:
+        name = "fake_bank"
+        def is_match(self, parsed): return True
+        def extract_transactions(self, parsed):
+            return [_txn("2025-03-27", "-4.25", "STARBUCKS")]
+    monkeypatch.setattr(pipeline_module, "PARSER_REGISTRY", [FakeParser()])
+
+    # Override: title="March Amex", account_type=AMEX. Even though the text
+    # says "Visa", the explicit override must win.
+    result = extract_transactions_from_pdf(
+        PdfJob(path=pdf, title="March Amex", account_type=AccountType.AMEX)
+    )
+    assert result.title == "March Amex"
+    assert result.account_type == AccountType.AMEX
+    assert result.transactions[0].StatementTitle == "March Amex"
+    assert result.transactions[0].AccountType in (AccountType.AMEX, "amex")
+
+
+def test_extract_from_pdf_auto_detects_account_type_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bare Path → title defaults to stem, account_type auto-detected from text."""
+    from pdf_to_csv.pipeline import extract_transactions_from_pdf
+    pdf = tmp_path / "scotiabank_april.pdf"
+    pdf.write_bytes(b"")
+
+    monkeypatch.setattr(
+        pipeline_module, "parse_pdf",
+        lambda path, **kw: ParsedPDF(tables=[], text="Scotiabank Passport Visa Infinite"),
+    )
+    class FakeParser:
+        name = "fake_bank"
+        def is_match(self, parsed): return True
+        def extract_transactions(self, parsed):
+            return [_txn("2025-03-27", "-4.25", "STARBUCKS")]
+    monkeypatch.setattr(pipeline_module, "PARSER_REGISTRY", [FakeParser()])
+
+    result = extract_transactions_from_pdf(pdf)
+    assert result.title == "scotiabank_april"  # filename stem
+    assert result.account_type == AccountType.VISA  # auto-detected
 
 
 def test_extract_from_pdf_surfaces_docling_error_without_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

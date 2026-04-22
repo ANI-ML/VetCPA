@@ -56,21 +56,34 @@
     /* Selected files list */
     .files { margin: 12px 0 0; padding: 0; list-style: none; }
     .files li {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(160px, 1.4fr) 1fr minmax(150px, auto) auto auto;
+      gap: 8px;
       align-items: center;
-      justify-content: space-between;
       padding: 8px 12px;
       border: 1px solid var(--border);
       border-radius: 6px;
       margin-top: 6px;
       background: #fafafa;
     }
-    .files .size { color: var(--muted); font-variant-numeric: tabular-nums; }
-    .files button {
+    .files .filename { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+    .files .size { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+    .files input[type="text"],
+    .files select {
+      padding: 5px 8px; border: 1px solid var(--border);
+      border-radius: 4px; font-size: 13px; background: #fff;
+      width: 100%;
+    }
+    .files input[type="text"]:focus,
+    .files select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    .files button.remove {
       border: none; background: transparent; color: var(--muted);
       cursor: pointer; font-size: 16px; padding: 0 4px;
     }
-    .files button:hover { color: var(--bad); }
+    .files button.remove:hover { color: var(--bad); }
+    @media (max-width: 640px) {
+      .files li { grid-template-columns: 1fr; }
+    }
 
     /* Options */
     .options { display: flex; gap: 20px; flex-wrap: wrap; }
@@ -149,10 +162,13 @@
         <input type="file" id="fileInput" multiple accept="application/pdf,.pdf" />
         <div>
           <div><strong>Drop PDFs here</strong> or click to browse</div>
-          <div class="hint">One or more statements. Accepted: .pdf</div>
+          <div class="hint">Statements, receipts — one or many at once. Accepted: .pdf</div>
         </div>
       </label>
       <ul class="files" id="fileList"></ul>
+      <p class="hint" id="fileListHint" style="margin:10px 0 0;display:none;">
+        Edit the title for each statement and pick an account type (leave as <em>Auto-detect</em> to let the app guess from the text).
+      </p>
     </div>
 
     <div class="card">
@@ -188,7 +204,24 @@
   <script>
     "use strict";
 
-    const state = { files: [] };
+    // Each entry: { file: File, title: string, accountType: string }
+    // accountType "" means auto-detect (server will fill from doc text).
+    const state = { entries: [] };
+
+    const ACCOUNT_TYPES = [
+      { value: "",           label: "Auto-detect" },
+      { value: "visa",       label: "Visa" },
+      { value: "mastercard", label: "Mastercard" },
+      { value: "amex",       label: "American Express" },
+      { value: "chequing",   label: "Chequing / Debit" },
+      { value: "savings",    label: "Savings" },
+      { value: "other",      label: "Other" },
+    ];
+
+    function defaultTitleFor(file) {
+      // Strip common extensions; leave spaces/dashes alone for readability.
+      return file.name.replace(/\.(pdf|PDF)$/, "");
+    }
 
     const $ = (id) => document.getElementById(id);
     const drop = $("drop");
@@ -203,26 +236,68 @@
       for (const f of list) {
         if (!f.name.toLowerCase().endsWith(".pdf")) continue;
         // Skip duplicates (by name + size).
-        if (state.files.some((g) => g.name === f.name && g.size === f.size)) continue;
-        state.files.push(f);
+        if (state.entries.some((e) => e.file.name === f.name && e.file.size === f.size)) continue;
+        state.entries.push({
+          file: f,
+          title: defaultTitleFor(f),
+          accountType: "", // auto-detect
+        });
       }
       renderFiles();
     }
-    function removeAt(idx) { state.files.splice(idx, 1); renderFiles(); }
+    function removeAt(idx) { state.entries.splice(idx, 1); renderFiles(); }
+
     function renderFiles() {
       fileList.innerHTML = "";
-      for (let i = 0; i < state.files.length; i++) {
-        const f = state.files[i];
+      for (let i = 0; i < state.entries.length; i++) {
+        const e = state.entries[i];
         const li = document.createElement("li");
-        li.innerHTML = `<span>${escapeHtml(f.name)}</span>
-          <span class="size">${formatSize(f.size)}</span>
-          <button aria-label="Remove" title="Remove">✕</button>`;
-        li.querySelector("button").addEventListener("click", (e) => {
-          e.preventDefault(); e.stopPropagation(); removeAt(i);
+
+        const fname = document.createElement("span");
+        fname.className = "filename";
+        fname.title = e.file.name;
+        fname.textContent = e.file.name;
+
+        const size = document.createElement("span");
+        size.className = "size";
+        size.textContent = formatSize(e.file.size);
+
+        const titleInput = document.createElement("input");
+        titleInput.type = "text";
+        titleInput.value = e.title;
+        titleInput.placeholder = "Statement title";
+        titleInput.setAttribute("aria-label", `Title for ${e.file.name}`);
+        titleInput.addEventListener("input", (ev) => { state.entries[i].title = ev.target.value; });
+
+        const typeSelect = document.createElement("select");
+        typeSelect.setAttribute("aria-label", `Account type for ${e.file.name}`);
+        for (const opt of ACCOUNT_TYPES) {
+          const o = document.createElement("option");
+          o.value = opt.value; o.textContent = opt.label;
+          if (opt.value === e.accountType) o.selected = true;
+          typeSelect.appendChild(o);
+        }
+        typeSelect.addEventListener("change", (ev) => { state.entries[i].accountType = ev.target.value; });
+
+        const remove = document.createElement("button");
+        remove.className = "remove";
+        remove.setAttribute("aria-label", "Remove");
+        remove.title = "Remove";
+        remove.textContent = "✕";
+        remove.addEventListener("click", (ev) => {
+          ev.preventDefault(); ev.stopPropagation(); removeAt(i);
         });
+
+        li.appendChild(fname);
+        li.appendChild(titleInput);
+        li.appendChild(typeSelect);
+        li.appendChild(size);
+        li.appendChild(remove);
         fileList.appendChild(li);
       }
-      submitBtn.disabled = state.files.length === 0;
+      submitBtn.disabled = state.entries.length === 0;
+      document.getElementById("fileListHint").style.display =
+        state.entries.length > 0 ? "block" : "none";
     }
 
     fileInput.addEventListener("change", (e) => addFiles(e.target.files));
@@ -245,17 +320,13 @@
 
     // --- Submit -----------------------------------------------------------
     submitBtn.addEventListener("click", async () => {
-      if (state.files.length === 0) return;
-      setStatus(`Uploading and extracting ${state.files.length} PDF(s)...`);
+      if (state.entries.length === 0) return;
+      setStatus(`Uploading and extracting ${state.entries.length} PDF(s)...`);
       submitBtn.disabled = true;
-
-      const url = buildUrl("json");
-      const form = new FormData();
-      for (const f of state.files) form.append("files", f, f.name);
 
       try {
         const t0 = performance.now();
-        const res = await fetch(url, { method: "POST", body: form });
+        const res = await fetch(buildUrl("json"), { method: "POST", body: buildFormData() });
         if (!res.ok) {
           const detail = await readError(res);
           throw new Error(`HTTP ${res.status}: ${detail}`);
@@ -267,7 +338,7 @@
       } catch (e) {
         setStatus(`Error: ${e.message || e}`, true);
       } finally {
-        submitBtn.disabled = state.files.length === 0;
+        submitBtn.disabled = state.entries.length === 0;
       }
     });
 
@@ -276,13 +347,10 @@
     $("downloadExcelBtn").addEventListener("click", () => downloadAs("excel"));
 
     async function downloadAs(format) {
-      if (state.files.length === 0) return;
+      if (state.entries.length === 0) return;
       setStatus(`Building ${format.toUpperCase()}...`);
-      const url = buildUrl(format);
-      const form = new FormData();
-      for (const f of state.files) form.append("files", f, f.name);
       try {
-        const res = await fetch(url, { method: "POST", body: form });
+        const res = await fetch(buildUrl(format), { method: "POST", body: buildFormData() });
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readError(res)}`);
         const blob = await res.blob();
         const filename = format === "excel" ? "transactions.xlsx" : "transactions.csv";
@@ -291,6 +359,16 @@
       } catch (e) {
         setStatus(`Error: ${e.message || e}`, true);
       }
+    }
+
+    function buildFormData() {
+      const form = new FormData();
+      for (const e of state.entries) {
+        form.append("files", e.file, e.file.name);
+        form.append("titles", e.title || "");
+        form.append("account_types", e.accountType || "");
+      }
+      return form;
     }
 
     function triggerDownload(blob, filename) {
@@ -315,14 +393,22 @@
 
       const byParserStr = Object.entries(s.by_parser || {})
         .map(([k, v]) => `${k}: ${v}`).join(" · ");
-      $("byParser").textContent = byParserStr ? `By parser: ${byParserStr}` : "";
+      const byTypeStr = Object.entries(s.by_account_type || {})
+        .map(([k, v]) => `${k}: ${v}`).join(" · ");
+      $("byParser").innerHTML =
+        (byTypeStr ? `By account type: ${escapeHtml(byTypeStr)}<br>` : "") +
+        (byParserStr ? `By parser: ${escapeHtml(byParserStr)}` : "");
 
       const pf = $("perFile");
       pf.innerHTML = `
-        <thead><tr><th>File</th><th>Parser</th><th>Rows</th><th>Status</th></tr></thead>
+        <thead><tr>
+          <th>File</th><th>Title</th><th>Account</th><th>Parser</th><th>Rows</th><th>Status</th>
+        </tr></thead>
         <tbody>${(data.files || []).map(f => `
           <tr>
             <td>${escapeHtml(f.filename || "")}</td>
+            <td>${escapeHtml(f.title || "—")}</td>
+            <td>${escapeHtml(f.account_type || "—")}</td>
             <td>${escapeHtml(f.parser || "—")}</td>
             <td>${f.rows ?? 0}</td>
             <td class="${f.error ? "err" : "ok"}">${f.error ? escapeHtml(f.error) : "ok"}</td>
@@ -330,7 +416,9 @@
       `;
 
       const rows = data.rows || [];
-      const cols = rows.length ? Object.keys(rows[0]) : ["Date","Amount","Payee","Description","Reference","CheckNumber"];
+      const cols = rows.length ? Object.keys(rows[0]) : [
+        "StatementTitle","AccountType","Date","Amount","Payee","Description","Reference","CheckNumber",
+      ];
       const head = `<thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>`;
       const body = rows.map(r => `<tr>${cols.map(c => {
         const v = r[c] == null ? "" : String(r[c]);

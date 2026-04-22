@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from pdf_to_csv import api as api_module
 from pdf_to_csv import pipeline as pipeline_module
+from pdf_to_csv.account_type import AccountType
 from pdf_to_csv.api import app
 from pdf_to_csv.models import TransactionRow
 
@@ -47,22 +48,35 @@ def stub_pipeline(monkeypatch: pytest.MonkeyPatch):
     # Never build a real Docling converter.
     monkeypatch.setattr(api_module, "build_converter", lambda **_: object())
 
-    def fake_extract_many(pdf_paths, *, dedupe, include_source, converter, do_ocr=False):
+    def fake_extract_many(jobs, *, dedupe, include_source, converter, do_ocr=False):
         results = []
         all_txns: list[TransactionRow] = []
-        for p in pdf_paths:
+        for j in jobs:
+            # The pipeline now passes PdfJob objects; unwrap for the stub.
+            path = j.path if hasattr(j, "path") else j
             parser, txns, err = _state["per_file"].get(
-                p.name, ("scotiabank_passport_visa", [], None)
+                path.name, ("scotiabank_passport_visa", [], None)
             )
-            for t in txns:
-                t.source_file = p.name  # mirror what the real pipeline does
+            title = (j.title if hasattr(j, "title") and j.title else path.stem)
+            at = j.account_type if hasattr(j, "account_type") and j.account_type else AccountType.OTHER
+            # Clone per file — tests reuse the same TransactionRow across entries,
+            # and stamping metadata in-place would otherwise overwrite siblings.
+            stamped = [
+                t.model_copy(update={
+                    "StatementTitle": title, "AccountType": at, "source_file": path.name,
+                })
+                for t in txns
+            ]
             results.append(pipeline_module.PdfExtractionResult(
-                pdf_path=p, parser_name=parser, transactions=txns, error=err,
+                pdf_path=path, parser_name=parser, transactions=stamped,
+                title=title, account_type=at, error=err,
             ))
-            all_txns.extend(txns)
+            all_txns.extend(stamped)
         df = pipeline_module.transactions_to_dataframe(all_txns, include_source=include_source)
         if dedupe and not df.empty:
-            df = df.drop_duplicates(subset=["Date", "Amount", "Description"]).reset_index(drop=True)
+            df = df.drop_duplicates(
+                subset=["StatementTitle", "Date", "Amount", "Description"]
+            ).reset_index(drop=True)
         return df, results
 
     monkeypatch.setattr(api_module, "extract_transactions_from_many", fake_extract_many)
@@ -136,20 +150,26 @@ def test_extract_json_default_shape(client: TestClient, stub_pipeline) -> None:
     assert body["summary"]["rows_after_dedup"] == 2
     assert body["summary"]["by_parser"] == {"scotiabank_passport_visa": 2}
 
-    # Per-file
+    # Per-file — now carries title + account_type
     assert body["files"] == [{
         "filename": "a.pdf",
+        "title": "a",
+        "account_type": "other",
         "parser": "scotiabank_passport_visa",
         "rows": 2,
         "error": None,
     }]
 
-    # Rows — canonical 6-column schema, no source columns by default
+    # Rows — canonical 8-column schema (StatementTitle + AccountType + 6 others),
+    # no source columns by default.
     assert set(body["rows"][0].keys()) == {
+        "StatementTitle", "AccountType",
         "Date", "Amount", "Payee", "Description", "Reference", "CheckNumber",
     }
     assert body["rows"][0]["Date"] == "2025-03-27"
     assert body["rows"][0]["Amount"] == "-4.25"
+    assert body["rows"][0]["StatementTitle"] == "a"
+    assert body["rows"][0]["AccountType"] == "other"
 
 
 def test_extract_csv_returns_text_csv_with_attachment_header(client: TestClient, stub_pipeline) -> None:
@@ -168,8 +188,11 @@ def test_extract_csv_returns_text_csv_with_attachment_header(client: TestClient,
 
     text = r.text
     lines = text.strip().splitlines()
-    assert lines[0] == "Date,Amount,Payee,Description,Reference,CheckNumber"
-    assert lines[1].startswith("2025-03-27,-4.25,STARBUCKS")
+    assert lines[0] == (
+        "StatementTitle,AccountType,Date,Amount,Payee,Description,Reference,CheckNumber"
+    )
+    # StatementTitle "a" (from filename stem), AccountType "other" (no text auto-detect).
+    assert lines[1].startswith("a,other,2025-03-27,-4.25,STARBUCKS")
 
 
 def test_extract_excel_returns_xlsx(client: TestClient, stub_pipeline) -> None:
@@ -189,6 +212,7 @@ def test_extract_excel_returns_xlsx(client: TestClient, stub_pipeline) -> None:
     # Parse the bytes back as an xlsx to confirm it's a valid workbook.
     df = pd.read_excel(io.BytesIO(r.content), engine="openpyxl")
     assert list(df.columns) == [
+        "StatementTitle", "AccountType",
         "Date", "Amount", "Payee", "Description", "Reference", "CheckNumber",
     ]
     assert len(df) == 1
@@ -209,14 +233,21 @@ def test_extract_include_source_adds_audit_columns(client: TestClient, stub_pipe
     assert row["source_file"] == "a.pdf"
 
 
-def test_extract_dedupes_across_multiple_uploads(client: TestClient, stub_pipeline) -> None:
+def test_extract_dedupes_within_same_statement_title(client: TestClient, stub_pipeline) -> None:
+    # Two uploads with the *same* title (e.g. overlapping statement windows for
+    # the same account) should dedupe identical rows. Dedup key is
+    # (StatementTitle, Date, Amount, Description), so same-title-same-row -> one row.
     dup = _txn("2025-03-27", "-4.25", "STARBUCKS")
     stub_pipeline({
         "a.pdf": ("scotiabank_passport_visa", [dup], None),
-        "b.pdf": ("scotiabank_passport_visa", [dup], None),  # identical row
+        "b.pdf": ("scotiabank_passport_visa", [dup], None),
     })
     r = client.post(
         "/extract",
+        data={
+            "titles": ["March Visa", "March Visa"],
+            "account_types": ["visa", "visa"],
+        },
         files=[
             ("files", ("a.pdf", _pdf_bytes(), "application/pdf")),
             ("files", ("b.pdf", _pdf_bytes(), "application/pdf")),
@@ -226,6 +257,27 @@ def test_extract_dedupes_across_multiple_uploads(client: TestClient, stub_pipeli
     assert body["summary"]["rows_extracted"] == 2
     assert body["summary"]["rows_after_dedup"] == 1
     assert len(body["rows"]) == 1
+
+
+def test_extract_keeps_same_row_across_distinct_statements(client: TestClient, stub_pipeline) -> None:
+    # Different titles -> the same-looking row is legitimately a distinct
+    # transaction on a different statement, and must be preserved.
+    dup = _txn("2025-03-27", "-4.25", "STARBUCKS")
+    stub_pipeline({
+        "a.pdf": ("scotiabank_passport_visa", [dup], None),
+        "b.pdf": ("scotiabank_passport_visa", [dup], None),
+    })
+    r = client.post(
+        "/extract",
+        data={"titles": ["March Visa", "March Amex"]},
+        files=[
+            ("files", ("a.pdf", _pdf_bytes(), "application/pdf")),
+            ("files", ("b.pdf", _pdf_bytes(), "application/pdf")),
+        ],
+    )
+    body = r.json()
+    assert body["summary"]["rows_after_dedup"] == 2
+    assert {r_["StatementTitle"] for r_ in body["rows"]} == {"March Visa", "March Amex"}
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +302,50 @@ def test_extract_rejects_empty_file(client: TestClient, stub_pipeline) -> None:
     )
     assert r.status_code == 400
     assert "empty" in r.json()["detail"]
+
+
+def test_extract_rejects_mismatched_titles_length(client: TestClient, stub_pipeline) -> None:
+    stub_pipeline({})
+    r = client.post(
+        "/extract",
+        data={"titles": ["only-one"]},
+        files=[
+            ("files", ("a.pdf", _pdf_bytes(), "application/pdf")),
+            ("files", ("b.pdf", _pdf_bytes(), "application/pdf")),
+        ],
+    )
+    assert r.status_code == 400
+    assert "titles has" in r.json()["detail"]
+
+
+def test_extract_rejects_unknown_account_type(client: TestClient, stub_pipeline) -> None:
+    stub_pipeline({})
+    r = client.post(
+        "/extract",
+        data={"account_types": ["platinum"]},  # not a known AccountType value
+        files=[("files", ("a.pdf", _pdf_bytes(), "application/pdf"))],
+    )
+    assert r.status_code == 400
+    assert "Unknown account_type" in r.json()["detail"]
+
+
+def test_extract_accepts_explicit_account_type(client: TestClient, stub_pipeline) -> None:
+    stub_pipeline({
+        "a.pdf": ("scotiabank_passport_visa", [
+            _txn("2025-03-27", "-4.25", "STARBUCKS"),
+        ], None),
+    })
+    r = client.post(
+        "/extract",
+        data={"titles": ["March Amex"], "account_types": ["amex"]},
+        files=[("files", ("a.pdf", _pdf_bytes(), "application/pdf"))],
+    )
+    body = r.json()
+    assert body["files"][0]["title"] == "March Amex"
+    assert body["files"][0]["account_type"] == "amex"
+    assert body["rows"][0]["StatementTitle"] == "March Amex"
+    assert body["rows"][0]["AccountType"] == "amex"
+    assert body["summary"]["by_account_type"] == {"amex": 1}
 
 
 def test_extract_surfaces_per_file_errors_in_summary(client: TestClient, stub_pipeline) -> None:

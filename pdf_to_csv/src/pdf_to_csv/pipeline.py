@@ -16,12 +16,13 @@ exist and in what precedence.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 import pandas as pd
 
+from pdf_to_csv.account_type import AccountType, detect_account_type
 from pdf_to_csv.config import load_settings
 from pdf_to_csv.docling_client import ParsedPDF, parse_pdf
 from pdf_to_csv.models import TransactionRow
@@ -46,6 +47,27 @@ class NoParserMatchedError(RuntimeError):
     """Raised when not even the generic fallback can handle a PDF."""
 
 
+@dataclass
+class PdfJob:
+    """One PDF to process, plus the metadata the accountant will see in the
+    output CSV. Title defaults to the filename stem; account_type is
+    auto-detected when None."""
+
+    path: Path
+    title: str | None = None
+    account_type: AccountType | None = None
+
+    @classmethod
+    def from_any(cls, value: "PdfJob | Path | str") -> "PdfJob":
+        if isinstance(value, PdfJob):
+            return value
+        return cls(path=Path(value))
+
+
+# Callers can pass any of these; we normalize to PdfJob internally.
+PdfJobLike = Union[PdfJob, Path, str]
+
+
 def detect_bank_parser(parsed: ParsedPDF) -> BaseParser:
     """Return the first registered parser whose `is_match` claims this PDF."""
     for parser in PARSER_REGISTRY:
@@ -62,54 +84,90 @@ class PdfExtractionResult:
     pdf_path: Path
     parser_name: str | None
     transactions: list[TransactionRow]
+    title: str = ""
+    account_type: AccountType = AccountType.OTHER
     error: str | None = None
 
 
 def extract_transactions_from_pdf(
-    pdf_path: Path | str,
+    job: PdfJobLike,
     *,
     do_ocr: bool = False,
     converter: "DocumentConverter | None" = None,
 ) -> PdfExtractionResult:
     """Run Docling + parser pipeline on one PDF. Never raises — failures land
     in `result.error` so batch runs don't die on a single bad file."""
-    pdf_path = Path(pdf_path)
+    job = PdfJob.from_any(job)
+    pdf_path = job.path
+    default_title = pdf_path.stem
+
     try:
         parsed = parse_pdf(pdf_path, do_ocr=do_ocr, converter=converter)
     except Exception as exc:  # noqa: BLE001 - we want to report every failure mode
-        return PdfExtractionResult(pdf_path, None, [], error=f"docling: {exc}")
+        return PdfExtractionResult(
+            pdf_path=pdf_path,
+            parser_name=None,
+            transactions=[],
+            title=job.title or default_title,
+            account_type=job.account_type or AccountType.OTHER,
+            error=f"docling: {exc}",
+        )
+
+    # Resolve metadata: user-provided wins, else auto-detect.
+    title = job.title if job.title is not None else default_title
+    account_type = job.account_type if job.account_type is not None else detect_account_type(
+        parsed.text or ""
+    )
 
     try:
         parser = detect_bank_parser(parsed)
     except NoParserMatchedError as exc:
-        return PdfExtractionResult(pdf_path, None, [], error=str(exc))
+        return PdfExtractionResult(
+            pdf_path=pdf_path, parser_name=None, transactions=[],
+            title=title, account_type=account_type, error=str(exc),
+        )
 
     try:
         txns = parser.extract_transactions(parsed)
     except Exception as exc:  # noqa: BLE001
-        return PdfExtractionResult(pdf_path, parser.name, [], error=f"{parser.name}: {exc}")
+        return PdfExtractionResult(
+            pdf_path=pdf_path, parser_name=parser.name, transactions=[],
+            title=title, account_type=account_type, error=f"{parser.name}: {exc}",
+        )
 
-    # Stamp every row with its source file for downstream audit / debugging.
+    # Stamp every row with the resolved statement metadata + source file name.
     for t in txns:
+        t.StatementTitle = title
+        t.AccountType = account_type
         t.source_file = pdf_path.name
 
-    return PdfExtractionResult(pdf_path, parser.name, txns)
+    return PdfExtractionResult(
+        pdf_path=pdf_path, parser_name=parser.name, transactions=txns,
+        title=title, account_type=account_type,
+    )
 
 
 def transactions_to_dataframe(
     txns: list[TransactionRow], *, include_source: bool = False
 ) -> pd.DataFrame:
-    """Canonical 6-column DataFrame (+ optional `source_bank`, `source_file`)."""
+    """Canonical DataFrame (optionally + audit columns).
+
+    Rows are sorted by (StatementTitle, Date) so output is grouped by
+    statement — the shape the accountant reads most naturally.
+    """
     settings = load_settings()
+    cols = list(settings.output_columns)
+    if include_source:
+        cols += ["source_bank", "source_file"]
+
     if not txns:
-        cols = list(settings.output_columns)
-        if include_source:
-            cols += ["source_bank", "source_file"]
         return pd.DataFrame(columns=cols)
 
     records = []
     for t in txns:
         record = {
+            "StatementTitle": t.StatementTitle,
+            "AccountType": _account_value(t.AccountType),
             "Date": t.Date.isoformat(),
             "Amount": str(t.Amount),
             "Payee": t.Payee,
@@ -121,23 +179,25 @@ def transactions_to_dataframe(
             record["source_bank"] = t.source_bank or ""
             record["source_file"] = t.source_file or ""
         records.append(record)
-    df = pd.DataFrame.from_records(records)
-    # Enforce column order.
-    cols = list(settings.output_columns)
-    if include_source:
-        cols += ["source_bank", "source_file"]
-    return df[cols]
+
+    df = pd.DataFrame.from_records(records)[cols]
+    # Group by statement for the accountant; stable sort keeps original
+    # within-statement ordering when dates tie.
+    if not df.empty:
+        df = df.sort_values(
+            by=["StatementTitle", "Date"], kind="stable"
+        ).reset_index(drop=True)
+    return df
 
 
-def _dedupe_key(row: dict[str, str]) -> tuple[str, str, str]:
-    # Dedup key: (Date, Amount, Description). Two statements overlapping on
-    # the same window shouldn't duplicate rows — this is the combination banks
-    # are effectively unique on.
-    return (row["Date"], row["Amount"], row["Description"])
+def _account_value(at: AccountType | str) -> str:
+    """Pydantic v2 with use_enum_values=True stores the raw string; older
+    callers might still pass an enum. Normalize either way."""
+    return at.value if isinstance(at, AccountType) else str(at)
 
 
 def extract_transactions_from_many(
-    pdf_paths: list[Path | str],
+    jobs: list[PdfJobLike],
     *,
     dedupe: bool = True,
     include_source: bool = False,
@@ -146,22 +206,27 @@ def extract_transactions_from_many(
 ) -> tuple[pd.DataFrame, list[PdfExtractionResult]]:
     """Batch entry point.
 
+    Accepts `PdfJob` objects with explicit title / account_type, or bare
+    Path / str when you want defaults (title=stem, account_type=auto-detect).
+
     Returns:
         (dataframe, per-file results). The DataFrame is the deduped canonical
-        schema (optionally with source columns). The per-file results include
-        parser names and any errors, for summary reporting in the CLI/API.
+        schema (optionally with source columns), sorted by (StatementTitle, Date).
+        Per-file results carry parser name, resolved metadata, and any errors.
     """
     per_file: list[PdfExtractionResult] = []
     all_txns: list[TransactionRow] = []
-    for p in pdf_paths:
-        r = extract_transactions_from_pdf(p, do_ocr=do_ocr, converter=converter)
+    for j in jobs:
+        r = extract_transactions_from_pdf(j, do_ocr=do_ocr, converter=converter)
         per_file.append(r)
         all_txns.extend(r.transactions)
 
     df = transactions_to_dataframe(all_txns, include_source=include_source)
     if dedupe and not df.empty:
-        # pandas drop_duplicates keeps the first occurrence — preserves parser
-        # ordering (a bank-specific row keeps priority over a generic one if
-        # both pipelines picked up the same transaction).
-        df = df.drop_duplicates(subset=["Date", "Amount", "Description"]).reset_index(drop=True)
+        # Dedup key: (StatementTitle, Date, Amount, Description). Including
+        # StatementTitle means the same transaction appearing in two distinct
+        # statements (different titles) stays — that's almost always intentional.
+        df = df.drop_duplicates(
+            subset=["StatementTitle", "Date", "Amount", "Description"]
+        ).reset_index(drop=True)
     return df, per_file

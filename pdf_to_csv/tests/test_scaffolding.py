@@ -16,6 +16,8 @@ def test_settings_default_columns() -> None:
 
     s = load_settings()
     assert s.output_columns == (
+        "StatementTitle",
+        "AccountType",
         "Date",
         "Amount",
         "Payee",

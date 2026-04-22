@@ -51,21 +51,28 @@ def _fake_pipeline(
         lambda **_: object(),
     )
 
-    def fake_extract_many(pdf_paths, *, dedupe, include_source, converter, do_ocr=False):
+    def fake_extract_many(jobs, *, dedupe, include_source, converter, do_ocr=False):
         results = []
         all_txns: list[TransactionRow] = []
-        for p in pdf_paths:
+        for j in jobs:
+            # CLI calls with list[Path]; pipeline calls with list[PdfJob]. Unwrap either.
+            p = j.path if hasattr(j, "path") else Path(j)
+            title = j.title if hasattr(j, "title") and j.title else p.stem
             parser, txns, err = per_pdf[str(p)]
+            # Mirror the real pipeline: stamp statement metadata + source file.
+            for t in txns:
+                t.StatementTitle = title
+                t.source_file = p.name
             results.append(pipeline_module.PdfExtractionResult(
-                pdf_path=Path(p),
-                parser_name=parser,
-                transactions=txns,
-                error=err,
+                pdf_path=p, parser_name=parser, transactions=txns,
+                title=title, error=err,
             ))
             all_txns.extend(txns)
         df = pipeline_module.transactions_to_dataframe(all_txns, include_source=include_source)
         if dedupe and not df.empty:
-            df = df.drop_duplicates(subset=["Date", "Amount", "Description"]).reset_index(drop=True)
+            df = df.drop_duplicates(
+                subset=["StatementTitle", "Date", "Amount", "Description"]
+            ).reset_index(drop=True)
         return df, results
 
     monkeypatch.setattr(
@@ -110,10 +117,13 @@ def test_extract_writes_csv_with_canonical_schema(monkeypatch: pytest.MonkeyPatc
     with out.open() as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 3
-    # Canonical column order.
+    # Canonical column order — StatementTitle + AccountType lead for readability.
     assert list(rows[0].keys()) == [
+        "StatementTitle", "AccountType",
         "Date", "Amount", "Payee", "Description", "Reference", "CheckNumber",
     ]
+    # Rows sorted by (StatementTitle, Date): title "a" before "b".
+    assert rows[0]["StatementTitle"] == "a"
     assert rows[0]["Date"] == "2025-03-27"
     assert rows[0]["Amount"] == "-4.25"
     assert rows[0]["Payee"] == "STARBUCKS"
@@ -151,6 +161,7 @@ def test_extract_writes_excel_when_requested(monkeypatch: pytest.MonkeyPatch, fa
 
     xdf = pd.read_excel(xlsx, engine="openpyxl")
     assert list(xdf.columns) == [
+        "StatementTitle", "AccountType",
         "Date", "Amount", "Payee", "Description", "Reference", "CheckNumber",
     ]
     assert len(xdf) == 1
@@ -178,6 +189,7 @@ def test_extract_include_source_adds_audit_columns(monkeypatch: pytest.MonkeyPat
     with out.open() as f:
         header = next(csv.reader(f))
     assert header == [
+        "StatementTitle", "AccountType",
         "Date", "Amount", "Payee", "Description", "Reference", "CheckNumber",
         "source_bank", "source_file",
     ]

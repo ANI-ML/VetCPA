@@ -1,15 +1,23 @@
 """FastAPI HTTP server for pdf_to_csv.
 
 Endpoints:
+    GET  /                               Drag-and-drop front end.
     GET  /health                         Liveness check.
-    POST /extract                        Upload PDFs, get transactions back.
+    POST /extract                        Upload PDFs + metadata, get rows back.
 
 Run it locally:
     uvicorn pdf_to_csv.api:app --reload --host 0.0.0.0 --port 8000
     # then browse http://localhost:8000/docs  for Swagger UI
 
-/extract accepts one or more PDFs via multipart/form-data (`files` field, repeat
-for each file). Response shape is controlled by `?format=`:
+/extract is multipart/form-data:
+
+    files           one or more PDF statements (repeat the field for each).
+    titles          OPTIONAL parallel array of titles (one per file).
+                    Missing / empty -> we default to the filename stem.
+    account_types   OPTIONAL parallel array: visa|mastercard|amex|chequing|
+                    savings|other. Missing / empty -> auto-detected from text.
+
+Response shape is controlled by `?format=`:
 
     ?format=json   (default) — JSON with summary, per-file results, and rows
     ?format=csv              — text/csv attachment
@@ -37,11 +45,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from pdf_to_csv.account_type import AccountType
 from pdf_to_csv.docling_client import build_converter
-from pdf_to_csv.pipeline import extract_transactions_from_many
+from pdf_to_csv.pipeline import PdfJob, extract_transactions_from_many
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -83,7 +92,7 @@ def _get_converter(ocr: bool):
 
 
 # ---------------------------------------------------------------------------
-# GET /health
+# GET /, /health
 # ---------------------------------------------------------------------------
 
 @app.get("/", include_in_schema=False)
@@ -104,9 +113,40 @@ def health() -> dict[str, str]:
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024   # 50 MB per file — plenty for a statement
 
 
+def _resolve_account_type(raw: str | None) -> AccountType | None:
+    """Map a form-provided string to AccountType. Empty/missing -> None (auto-detect)."""
+    if raw is None:
+        return None
+    s = raw.strip().lower()
+    if not s:
+        return None
+    try:
+        return AccountType(s)
+    except ValueError as exc:
+        valid = ", ".join(m.value for m in AccountType)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown account_type {raw!r}. Valid values: {valid}.",
+        ) from exc
+
+
 @app.post("/extract")
 async def extract(
     files: list[UploadFile] = File(..., description="One or more PDF statements."),
+    titles: list[str] | None = Form(
+        None,
+        description=(
+            "Optional parallel array of titles (one per file). Defaults to the "
+            "filename stem when missing/empty."
+        ),
+    ),
+    account_types: list[str] | None = Form(
+        None,
+        description=(
+            "Optional parallel array: visa|mastercard|amex|chequing|savings|other. "
+            "Missing/empty entries are auto-detected from the document text."
+        ),
+    ),
     format: Literal["json", "csv", "excel"] = Query(
         "json", description="Response shape: JSON (default), CSV attachment, or .xlsx attachment."
     ),
@@ -114,7 +154,7 @@ async def extract(
         False, description="Include source_bank + source_file columns in the output."
     ),
     dedupe: bool = Query(
-        True, description="Drop rows with identical (Date, Amount, Description) across files."
+        True, description="Drop rows with identical (Title, Date, Amount, Description)."
     ),
     ocr: bool = Query(
         False, description="Enable Docling OCR (needed for scanned statements)."
@@ -132,11 +172,26 @@ async def extract(
                 detail=f"Unsupported file type: {f.filename!r}. Only .pdf is accepted.",
             )
 
+    # Parallel-array validation — if provided, lengths must match `files`.
+    if titles is not None and len(titles) != len(files):
+        raise HTTPException(
+            status_code=400,
+            detail=f"titles has {len(titles)} entries; expected {len(files)} (one per file).",
+        )
+    if account_types is not None and len(account_types) != len(files):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"account_types has {len(account_types)} entries; "
+                f"expected {len(files)} (one per file)."
+            ),
+        )
+
     # Spool uploads to a temp dir so Docling (which takes a Path) can read them.
     # The TemporaryDirectory cleans itself up when the request ends.
     with tempfile.TemporaryDirectory(prefix="pdf_to_csv_") as td:
-        paths: list[Path] = []
-        for f in files:
+        jobs: list[PdfJob] = []
+        for i, f in enumerate(files):
             dest = Path(td) / Path(f.filename or "upload.pdf").name
             content = await f.read()
             if len(content) > MAX_UPLOAD_BYTES:
@@ -147,11 +202,20 @@ async def extract(
             if not content:
                 raise HTTPException(status_code=400, detail=f"{f.filename} is empty.")
             dest.write_bytes(content)
-            paths.append(dest)
+
+            # An empty-string title entry counts as "use the default."
+            raw_title = titles[i] if titles is not None else None
+            title: str | None = raw_title.strip() if raw_title and raw_title.strip() else None
+            raw_at = account_types[i] if account_types is not None else None
+            jobs.append(PdfJob(
+                path=dest,
+                title=title,
+                account_type=_resolve_account_type(raw_at),
+            ))
 
         converter = _get_converter(ocr=ocr)
         df, results = extract_transactions_from_many(
-            paths,
+            jobs,
             dedupe=dedupe,
             include_source=include_source,
             converter=converter,
@@ -160,17 +224,22 @@ async def extract(
     # --- Build summary ---------------------------------------------------
     total_extracted = sum(len(r.transactions) for r in results)
     by_parser: dict[str, int] = {}
+    by_account_type: dict[str, int] = {}
     files_summary: list[dict[str, Any]] = []
     for r in results:
         files_summary.append({
             "filename": r.pdf_path.name,
+            "title": r.title,
+            "account_type": r.account_type.value if hasattr(r.account_type, "value") else str(r.account_type),
             "parser": r.parser_name,
             "rows": len(r.transactions),
             "error": r.error,
         })
         for t in r.transactions:
-            key = t.source_bank or "unknown"
-            by_parser[key] = by_parser.get(key, 0) + 1
+            pk = t.source_bank or "unknown"
+            by_parser[pk] = by_parser.get(pk, 0) + 1
+            ak = t.AccountType if isinstance(t.AccountType, str) else t.AccountType.value
+            by_account_type[ak] = by_account_type.get(ak, 0) + 1
 
     summary = {
         "files_processed": len(results),
@@ -178,6 +247,7 @@ async def extract(
         "rows_extracted": total_extracted,
         "rows_after_dedup": len(df),
         "by_parser": by_parser,
+        "by_account_type": by_account_type,
     }
 
     # --- Emit in requested format ---------------------------------------
