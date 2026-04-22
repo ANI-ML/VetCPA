@@ -178,8 +178,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "VetCPA",
         "CFBundleDisplayName": "VetCPA",
-        "CFBundleShortVersionString": "0.1.2",
-        "CFBundleVersion": "0.1.2",
+        "CFBundleShortVersionString": "0.1.3",
+        "CFBundleVersion": "0.1.3",
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "12.0",
         "NSHumanReadableCopyright": "© 2025 ANI.ML Health",

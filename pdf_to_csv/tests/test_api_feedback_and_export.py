@@ -13,6 +13,11 @@ from pdf_to_csv.api import app
 from pdf_to_csv.feedback_store import FeedbackStore
 
 
+@pytest.fixture(autouse=True)
+def _skip_warmup(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("VETCPA_SKIP_WARMUP", "1")
+
+
 @pytest.fixture()
 def temp_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Redirect the API's feedback store to a per-test SQLite file."""

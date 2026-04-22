@@ -61,7 +61,15 @@ printf '  • The .dmg you originally downloaded\n\n'
 
 # --- Confirm -------------------------------------------------------------
 if [[ "$assume_yes" -eq 0 ]]; then
-  read -r -p "Continue? [y/N] " reply
+  # When this script is piped via `curl ... | bash`, stdin is the script
+  # body itself, so a normal `read` returns EOF immediately and the user
+  # never gets the prompt. Reading explicitly from /dev/tty bypasses that
+  # and talks to the actual terminal, regardless of how bash was invoked.
+  if [[ ! -e /dev/tty ]]; then
+    echo "Error: no controlling terminal detected. Re-run with --yes to skip the prompt."
+    exit 1
+  fi
+  read -r -p "Continue? [y/N] " reply </dev/tty
   case "$reply" in
     [Yy]|[Yy][Ee][Ss]) ;;
     *) echo "Cancelled."; exit 0 ;;

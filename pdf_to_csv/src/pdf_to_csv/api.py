@@ -60,6 +60,7 @@ from pdf_to_csv.ingest import (
     normalize_for_docling,
 )
 from pdf_to_csv.model_status import get_cached_status
+from pdf_to_csv.model_warmup import get_warmup_state, start_warmup_in_background
 from pdf_to_csv.pipeline import PdfJob, extract_transactions_from_many
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -78,12 +79,17 @@ async def lifespan(app: FastAPI):
     # FeedbackStore lazy-initialises its SQLite file on first write, so
     # building it at startup is safe even when the DB file doesn't exist yet.
     app.state.feedback_store = FeedbackStore(default_db_path())  # type: ignore[attr-defined]
+    # Start pulling Docling's ML models *now*, in the background, so by the
+    # time the user clicks Extract the download is either done or close to
+    # done. /models/status reports progress; the UI gates its drop zone +
+    # Extract button on `ready`. Suppressed via VETCPA_SKIP_WARMUP=1 in tests.
+    start_warmup_in_background()
     yield
 
 
 app = FastAPI(
     title="pdf-to-csv",
-    version="0.1.2",
+    version="0.1.3",
     description=(
         "Convert bank/credit-card statement PDFs into a unified CSV/Excel. "
         "Upload PDFs to /extract; choose response shape with ?format="
@@ -123,12 +129,27 @@ def health() -> dict[str, str]:
 def models_status() -> dict[str, Any]:
     """First-launch model-download progress for the UI's splash banner.
 
-    Returns cache-dir byte totals + a coarse "ready" flag. The front end
-    polls this during the first extraction to show a progress bar so the
-    user doesn't think the app has frozen. When `DOCLING_ARTIFACTS_PATH`
-    is set (fully-offline bundles), `ready` is always True.
+    Blends two signals:
+      * `model_warmup` — whether the boot-time warmup thread has finished
+        its `.convert()` call. That's the authoritative "models are usable"
+        signal — once the warmup thread returns cleanly, Docling can answer
+        an /extract call without blocking on a download.
+      * `model_status` — cache-dir byte counts. Drives the progress bar.
+
+    The front end uses `ready` to enable or disable the Extract button and
+    shows the banner whenever warmup is in flight. When
+    `DOCLING_ARTIFACTS_PATH` is set (fully-offline bundles), `ready` flips
+    to True immediately and no banner is shown.
     """
-    return get_cached_status().to_dict()
+    cache = get_cached_status().to_dict()
+    warmup = get_warmup_state()
+    return {
+        **cache,
+        "ready": bool(cache["bundled"] or warmup["ready"]),
+        "downloading": bool(warmup["downloading"] and not warmup["ready"]),
+        "warmup_started": bool(warmup["started"]),
+        "error": warmup["error"],
+    }
 
 
 # ---------------------------------------------------------------------------

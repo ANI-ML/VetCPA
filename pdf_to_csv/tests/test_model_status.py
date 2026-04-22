@@ -26,6 +26,7 @@ def isolate_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Redirect the cache-dir probe at a tmp dir and clear env vars so each
     test starts from an empty state."""
     monkeypatch.setenv("PDF_TO_CSV_FEEDBACK_DB", str(tmp_path / "feedback.db"))
+    monkeypatch.setenv("VETCPA_SKIP_WARMUP", "1")
     monkeypatch.delenv("DOCLING_ARTIFACTS_PATH", raising=False)
     fake_cache = tmp_path / "fake_cache"
     fake_cache.mkdir()

@@ -8,7 +8,7 @@ def test_package_imports() -> None:
     from pdf_to_csv.parsers import base_parser  # noqa: F401
     from pdf_to_csv.parsers import scotiabank_passport_visa  # noqa: F401
 
-    assert pdf_to_csv.__version__ == "0.1.2"
+    assert pdf_to_csv.__version__ == "0.1.3"
 
 
 def test_settings_default_columns() -> None:

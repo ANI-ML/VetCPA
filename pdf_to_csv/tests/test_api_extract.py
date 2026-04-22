@@ -38,6 +38,13 @@ def _txn(d: str, amount: str, desc: str, source: str = "scotiabank_passport_visa
     )
 
 
+@pytest.fixture(autouse=True)
+def _skip_warmup(monkeypatch: pytest.MonkeyPatch):
+    """TestClient triggers lifespan, which would otherwise spawn Docling's
+    model-download thread. Short-circuit that."""
+    monkeypatch.setenv("VETCPA_SKIP_WARMUP", "1")
+
+
 @pytest.fixture()
 def stub_pipeline(monkeypatch: pytest.MonkeyPatch):
     """Stub Docling + the pipeline. Returns a function you can call from tests
