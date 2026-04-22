@@ -193,12 +193,50 @@ _COLUMN_MATCH_RATIO = 0.5   # >= 50% of non-empty cells in the column match
 _MIN_COLUMN_HITS = 2        # and at least this many actual hits
 
 
+# Header-keyword hints for classifying amount-shaped columns. Used only as a
+# tiebreaker: a generic parser that knew nothing about English would still pick
+# *some* amount column via the cell-content score; these hints make the right
+# choice when the statement has multiple amount columns (Debit + Credit +
+# Balance on chequing / savings layouts).
+_DEBIT_HINTS = ("DEBIT", "WITHDRAW", "CHARGE")
+_CREDIT_HINTS = ("CREDIT", "DEPOSIT", "PAID IN")
+_BALANCE_HINTS = ("BALANCE",)
+
+
+def _classify_amount_column(header: str) -> str | None:
+    """Return 'debit' / 'credit' / 'balance' / None from a header string.
+
+    A header that mentions BOTH debit and credit (e.g. "Credit/Debit") is a
+    combined signed column — we treat it as plain amount (return None).
+    """
+    up = header.upper()
+    if any(h in up for h in _BALANCE_HINTS):
+        return "balance"
+    has_debit = any(h in up for h in _DEBIT_HINTS)
+    has_credit = any(h in up for h in _CREDIT_HINTS)
+    if has_debit and has_credit:
+        return None
+    if has_debit:
+        return "debit"
+    if has_credit:
+        return "credit"
+    return None
+
+
 @dataclass
 class _Layout:
     date_col: int
-    amount_col: int
     description_col: int
+    # Amount strategy is one of:
+    #   "single"       -> amount_cols = (idx,)            — one signed-amount column
+    #   "debit_credit" -> amount_cols = (debit, credit)   — combine into signed
+    amount_strategy: str
+    amount_cols: tuple[int, ...]
     fallback_year: int | None
+
+    @property
+    def used_cols(self) -> set[int]:
+        return {self.date_col, self.description_col, *self.amount_cols}
 
 
 def _infer_layout(table: ExtractedTable, fallback_year: int | None) -> _Layout | None:
@@ -218,14 +256,75 @@ def _infer_layout(table: ExtractedTable, fallback_year: int | None) -> _Layout |
         return max(candidates, key=lambda s: getattr(s, attr))
 
     date_score = _pick("date_hits")
-    amount_score = _pick("amount_hits")
-    if date_score is None or amount_score is None:
+    if date_score is None:
         return None
 
-    # Description: the textual column with the longest mean cell content that
-    # isn't already the date or amount column.
-    used = {date_score.index, amount_score.index}
-    text_candidates = [s for s in scores if s.index not in used and s.textual_hits >= 1]
+    # Amount candidates — two acceptance paths:
+    #   (1) Cell content: at least MIN_HITS amount-shaped cells and at least
+    #       MATCH_RATIO of non-empty cells are amount-shaped. Works on columns
+    #       with no header hint.
+    #   (2) Header hint: the header says "debit"/"credit"/"balance" AND the
+    #       column has at least one amount-shaped cell. Chequing statements
+    #       legitimately have most rows empty in the Debit column (deposit
+    #       days) and vice-versa, so the strict ratio would exclude them.
+    amount_candidates: list[_ColumnScore] = []
+    for s in scores:
+        if s.total_non_empty == 0:
+            continue
+        meets_content = (
+            s.amount_hits >= _MIN_COLUMN_HITS
+            and (s.amount_hits / s.total_non_empty) >= _COLUMN_MATCH_RATIO
+        )
+        header = str(table.headers[s.index]) if s.index < len(table.headers) else ""
+        has_hint = _classify_amount_column(header) is not None
+        if meets_content or (has_hint and s.amount_hits >= 1):
+            amount_candidates.append(s)
+    if not amount_candidates:
+        return None
+
+    # Classify each amount candidate by its header keyword.
+    debit_col: int | None = None
+    credit_col: int | None = None
+    balance_col: int | None = None
+    plain_col: int | None = None
+    for s in amount_candidates:
+        header = table.headers[s.index] if s.index < len(table.headers) else ""
+        hint = _classify_amount_column(str(header))
+        if hint == "debit" and debit_col is None:
+            debit_col = s.index
+        elif hint == "credit" and credit_col is None:
+            credit_col = s.index
+        elif hint == "balance" and balance_col is None:
+            balance_col = s.index
+        elif hint is None and plain_col is None:
+            plain_col = s.index
+
+    # Decide amount strategy. A combined signed column (plain_col) wins over a
+    # half-resolved debit/credit pair so statements with "Credit/Debit" columns
+    # don't get mis-classified.
+    amount_strategy: str
+    amount_cols: tuple[int, ...]
+    if plain_col is not None:
+        amount_strategy = "single"
+        amount_cols = (plain_col,)
+    elif debit_col is not None and credit_col is not None:
+        amount_strategy = "debit_credit"
+        amount_cols = (debit_col, credit_col)
+    else:
+        # Last resort: the highest-scoring amount column that isn't a balance.
+        non_balance = [s for s in amount_candidates if s.index != balance_col]
+        if not non_balance:
+            return None
+        best = max(non_balance, key=lambda s: s.amount_hits)
+        amount_strategy = "single"
+        amount_cols = (best.index,)
+
+    # Description: longest-text textual column that isn't already used and
+    # isn't the balance column (which is numeric anyway, but belt+suspenders).
+    reserved = {date_score.index, *amount_cols}
+    if balance_col is not None:
+        reserved.add(balance_col)
+    text_candidates = [s for s in scores if s.index not in reserved and s.textual_hits >= 1]
     if not text_candidates:
         return None
     description_score = max(
@@ -235,10 +334,38 @@ def _infer_layout(table: ExtractedTable, fallback_year: int | None) -> _Layout |
 
     return _Layout(
         date_col=date_score.index,
-        amount_col=amount_score.index,
         description_col=description_score.index,
+        amount_strategy=amount_strategy,
+        amount_cols=amount_cols,
         fallback_year=fallback_year,
     )
+
+
+def _resolve_amount(row: list[str], layout: _Layout) -> Decimal | None:
+    """Apply the layout's amount strategy to one row.
+
+    * `single`       -> parse the one amount column.
+    * `debit_credit` -> if a row fills either column, the value becomes the
+       signed Amount (debits as negative, credits as positive). When both are
+       filled (rare — accounting reversals / adjustments), use credit - debit.
+    """
+    if layout.amount_strategy == "single":
+        idx = layout.amount_cols[0]
+        if idx >= len(row):
+            return None
+        return _try_parse_amount((row[idx] or "").strip())
+
+    # debit_credit
+    debit_idx, credit_idx = layout.amount_cols
+    debit = _try_parse_amount((row[debit_idx] or "").strip()) if debit_idx < len(row) else None
+    credit = _try_parse_amount((row[credit_idx] or "").strip()) if credit_idx < len(row) else None
+    if debit is not None and credit is not None:
+        return credit - abs(debit)
+    if debit is not None:
+        return -abs(debit)
+    if credit is not None:
+        return abs(credit)
+    return None
 
 
 def _mean_text_length(rows: list[list[str]], col_idx: int) -> float:
@@ -315,17 +442,16 @@ class GenericTableParser(BaseParser):
     def _rows_from_table(self, table: ExtractedTable, layout: _Layout) -> list[TransactionRow]:
         rows: list[TransactionRow] = []
         for row in table.rows:
-            if layout.date_col >= len(row) or layout.amount_col >= len(row):
+            if layout.date_col >= len(row):
                 continue
             raw_date = (row[layout.date_col] or "").strip()
-            raw_amount = (row[layout.amount_col] or "").strip()
             raw_desc = (
                 (row[layout.description_col] or "").strip()
                 if layout.description_col < len(row) else ""
             )
 
             parsed_date = _try_parse_date(raw_date, fallback_year=layout.fallback_year)
-            parsed_amount = _try_parse_amount(raw_amount)
+            parsed_amount = _resolve_amount(row, layout)
             if parsed_date is None or parsed_amount is None or not raw_desc:
                 continue
 

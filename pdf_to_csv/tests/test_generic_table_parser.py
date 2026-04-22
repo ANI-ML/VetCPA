@@ -152,6 +152,69 @@ def test_rows_tagged_with_source_bank() -> None:
     assert all(t.source_bank == "generic_table" for t in txns)
 
 
+def test_parses_chequing_debit_credit_balance_layout() -> None:
+    # Chequing/savings layout: three numeric columns — Withdrawals (debit),
+    # Deposits (credit), and a running Balance. The generic parser should
+    # combine the first two into a signed Amount and ignore Balance.
+    table = _table(
+        ["Date", "Description", "Withdrawals/Debits ($)", "Deposits/Credits ($)", "Balance ($)"],
+        [
+            ["02/27/2026", "BALANCE FORWARD", "", "", "157,637.74"],
+            ["03/02/2026", "MISC PAYMENT INSTINCT", "", "7,810.08", "149,827.66"],
+            ["03/02/2026", "DEBIT MEMO E-TRANSFER", "1,582.00", "", "151,409.66"],
+            ["03/03/2026", "INSURANCE", "886.54", "", "152,296.20"],
+        ],
+    )
+    parsed = ParsedPDF(tables=[table], text="")
+
+    txns = GenericTableParser().extract_transactions(parsed)
+
+    # BALANCE FORWARD has no debit/credit -> skipped. 3 real transactions.
+    assert len(txns) == 3
+    amounts = [t.Amount for t in txns]
+    assert amounts[0] == Decimal("7810.08")   # deposit
+    assert amounts[1] == Decimal("-1582.00")  # debit
+    assert amounts[2] == Decimal("-886.54")   # debit
+    # Descriptions carry the actual description, not the balance.
+    assert "INSTINCT" in txns[0].Description
+    # Balance figures (157,637.74 / 149,827.66 / ...) should NOT appear as
+    # Amounts — the old behavior picked the Balance column.
+    balance_figures = {
+        Decimal("-157637.74"), Decimal("-149827.66"),
+        Decimal("-151409.66"), Decimal("-152296.20"),
+    }
+    assert not balance_figures.intersection(amounts)
+
+
+def test_classify_amount_column_edge_cases() -> None:
+    from pdf_to_csv.parsers.generic_table import _classify_amount_column
+
+    # Combined signed column: both keywords present -> treated as plain amount.
+    assert _classify_amount_column("Credit/Debit") is None
+    # Case-insensitive header detection.
+    assert _classify_amount_column("withdrawals ($)") == "debit"
+    assert _classify_amount_column("DEPOSITS / CREDITS") == "credit"
+    assert _classify_amount_column("Balance ($)") == "balance"
+    # No hint -> None (lets the single-column path pick the best amount col).
+    assert _classify_amount_column("Amount") is None
+    assert _classify_amount_column("") is None
+
+
+def test_resolve_amount_handles_reversal_rows() -> None:
+    # Rare but real: a row has values in BOTH debit and credit columns
+    # (e.g., accounting adjustments, voided-and-re-entered). Net = credit - debit.
+    from pdf_to_csv.parsers.generic_table import _Layout, _resolve_amount
+
+    layout = _Layout(
+        date_col=0, description_col=1,
+        amount_strategy="debit_credit", amount_cols=(2, 3),
+        fallback_year=2026,
+    )
+    # Debit 100 + Credit 40 -> net -60
+    row = ["03/02/2026", "adj", "100.00", "40.00", "10000.00"]
+    assert _resolve_amount(row, layout) == Decimal("-60.00")
+
+
 def test_is_match_is_universal_fallback() -> None:
     p = GenericTableParser()
     # Accepts any PDF that had at least one table.
