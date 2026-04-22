@@ -99,33 +99,87 @@ def _run_warmup() -> None:
     log.info("Warmup: ready in %.1fs", elapsed)
 
 
-def _warm_docling() -> None:
-    """Actually trigger Docling's first-call model load + HF download.
+# Docling's model weights live on HuggingFace Hub. We pull each repo
+# explicitly in the warmup so both the layout model AND tableformer are
+# cached before the user runs a real extract — relying on a dummy convert()
+# to happen to trigger every model is fragile (a blank PDF never triggers
+# tableformer, so users saw "ready" and then a silent download on first
+# extraction).
+_DOCLING_MODEL_REPOS: tuple[str, ...] = (
+    "docling-project/docling-layout-heron",   # layout + reading-order
+    "docling-project/docling-models",          # tableformer + friends
+)
 
-    We import + call Docling here (not at module top) so a test harness
-    that never calls `start_warmup_in_background()` doesn't pay the
-    Docling import cost.
+
+def _warm_docling() -> None:
+    """Pull every Docling model upfront, then run a sanity-check convert().
+
+    Two stages on purpose:
+
+      1. `huggingface_hub.snapshot_download()` for each known Docling repo.
+         This is what actually fills `~/.cache/huggingface/hub/` and is the
+         real meat of the ~1.5 GB download the user sees in the progress
+         modal.
+      2. A real `DocumentConverter.convert()` call on a small table-bearing
+         PDF. If (1) succeeded this is near-instant; if (1) raised (e.g. an
+         outage on HF's CDN) Docling's lazy-load path still has a chance to
+         recover, and the error surfaces back to `/models/status`.
     """
+    _prefetch_model_repos()
+    _sanity_check_convert()
+
+
+def _prefetch_model_repos() -> None:
+    """Pull each Docling HF repo into the local cache."""
+    from huggingface_hub import snapshot_download
+
+    for repo_id in _DOCLING_MODEL_REPOS:
+        log.info("Warmup: snapshot_download(%s)", repo_id)
+        snapshot_download(repo_id=repo_id)
+
+
+def _sanity_check_convert() -> None:
+    """Run one convert() on a tiny table-bearing PDF — confirms Docling can
+    load every model it needs for real statement extraction, not just the
+    layout model."""
     import tempfile
     from pdf_to_csv.docling_client import build_converter
 
     converter = build_converter(do_ocr=False)
-
-    # Build a tiny blank PDF to feed Docling. The content doesn't matter —
-    # what matters is that convert() runs, which forces the layout model
-    # (and its dependencies) to download into ~/.cache/docling/.
     with tempfile.TemporaryDirectory(prefix="vetcpa-warmup-") as td:
         pdf_path = Path(td) / "warmup.pdf"
-        _write_blank_pdf(pdf_path)
+        _write_warmup_pdf(pdf_path)
         converter.convert(pdf_path)
 
 
-def _write_blank_pdf(out: Path) -> None:
-    """Write a 1-page blank A4 PDF via Pillow. ~1 KB; valid + readable by
-    every PDF tool we've tested against, including Docling."""
-    from PIL import Image
+def _write_warmup_pdf(out: Path) -> None:
+    """Render a tiny PDF that contains a *table* so Docling exercises the
+    tableformer code path during the warmup. Pillow is already a runtime
+    dep (HEIC support) so we don't take on anything new here."""
+    from PIL import Image, ImageDraw
 
     img = Image.new("RGB", (612, 792), color="white")
+    d = ImageDraw.Draw(img)
+
+    # Grid of lines suggesting a 3-column × 4-row table around the top
+    # third of the page. Layout-analysis + table-structure models both
+    # have something to chew on.
+    col_xs = (100, 260, 420, 500)
+    row_ys = (120, 170, 220, 270, 320)
+    for x in col_xs:
+        d.line([(x, row_ys[0]), (x, row_ys[-1])], fill="black", width=1)
+    for y in row_ys:
+        d.line([(col_xs[0], y), (col_xs[-1], y)], fill="black", width=1)
+
+    # Header + one data row. Content doesn't matter; we just want
+    # recognisable text cells.
+    d.text((110, 130), "Date",        fill="black")
+    d.text((270, 130), "Description", fill="black")
+    d.text((430, 130), "Amount",      fill="black")
+    d.text((110, 180), "2025-01-01",  fill="black")
+    d.text((270, 180), "Warmup row",  fill="black")
+    d.text((430, 180), "12.34",       fill="black")
+
     img.save(str(out), "PDF")
 
 
