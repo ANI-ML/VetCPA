@@ -6,7 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "pdf-to-csv"
 version = "0.1.2"
 description = "Convert bank and credit card statement PDFs into a unified CSV/Excel format using Docling."
-readme = "README.md"
+# The README lives at the repo root (one level up from this pyproject.toml)
+# so the GitHub landing page renders it automatically. We omit the
+# package-level `readme = ...` rather than point at `../README.md` because
+# setuptools rejects paths that escape the project dir.
 requires-python = ">=3.11"
 authors = [{ name = "ANIML / VetCPA" }]
 license = { text = "Proprietary" }

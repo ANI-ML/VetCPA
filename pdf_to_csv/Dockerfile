@@ -56,7 +56,6 @@ RUN pip install -r requirements.txt
 
 # Now the source. Changes to src/ invalidate only this small layer.
 COPY src/ ./src/
-COPY README.md ./
 RUN pip install --no-deps -e .
 
 # Feedback DB lives here; mount a volume to persist across container restarts.
