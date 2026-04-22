@@ -121,9 +121,10 @@ def test_index_serves_html_front_end(client: TestClient) -> None:
     assert r.headers["content-type"].startswith("text/html")
     # Sanity-check a few markers of the drag-and-drop UI.
     body = r.text
-    assert "<title>pdf-to-csv" in body
+    assert "<title>VetCPA" in body
     assert 'id="drop"' in body
     assert 'id="submitBtn"' in body
+    assert 'id="themeToggle"' in body
     assert "/extract" in body
 
 

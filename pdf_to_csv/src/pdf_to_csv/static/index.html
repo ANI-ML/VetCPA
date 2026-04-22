@@ -3,174 +3,432 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>pdf-to-csv — VetCPA</title>
+  <title>VetCPA — Statement extraction</title>
+  <meta name="theme-color" content="#f26522" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23f26522'/%3E%3Ctext x='50%25' y='62%25' text-anchor='middle' font-family='system-ui,sans-serif' font-size='36' font-weight='800' fill='white'%3EV%3C/text%3E%3C/svg%3E" />
   <style>
+    /* ------------------------------------------------------------------ *
+     *  Design tokens — ANI.ML Health palette
+     *  - Orange #F26522 is the primary action / accent
+     *  - VetCPA green #006747 marks success / confirmation
+     * ------------------------------------------------------------------ */
     :root {
-      --bg: #f7f7f8;
-      --card: #ffffff;
-      --ink: #1f2937;
-      --muted: #6b7280;
-      --border: #e5e7eb;
-      --accent: #d4212d;
-      --accent-ink: #ffffff;
-      --good: #047857;
-      --bad: #b91c1c;
-      --hover: #fef2f2;
+      /* Brand constants (never change with theme) */
+      --brand-orange:       #f26522;
+      --brand-orange-ink:   #ffffff;
+      --brand-orange-soft:  #ffe8d9;
+      --brand-green:        #006747;
+      --brand-green-soft:   #d9ebe3;
+
+      /* Neutrals + semantic — light-mode defaults */
+      --bg:         #f4f5f7;
+      --surface:    #ffffff;
+      --surface-2:  #fafbfc;     /* subtler surface (inputs, inset panels)  */
+      --border:     #e4e6eb;
+      --border-strong: #d1d5db;
+      --text:       #111827;
+      --text-soft:  #4b5563;
+      --muted:      #6b7280;
+      --accent:     var(--brand-orange);
+      --accent-ink: var(--brand-orange-ink);
+      --accent-soft:var(--brand-orange-soft);
+      --good:       var(--brand-green);
+      --good-soft:  var(--brand-green-soft);
+      --bad:        #c23b22;
+      --bad-soft:   #fde0d8;
+
+      /* Elevation + shape */
+      --shadow-xs: 0 1px 2px rgba(17, 24, 39, 0.04);
+      --shadow-sm: 0 1px 3px rgba(17, 24, 39, 0.06), 0 1px 2px rgba(17, 24, 39, 0.04);
+      --shadow-md: 0 4px 12px rgba(17, 24, 39, 0.08), 0 2px 4px rgba(17, 24, 39, 0.04);
+      --radius:    10px;
+      --radius-sm: 6px;
+
+      color-scheme: light;
     }
+
+    [data-theme="dark"] {
+      --bg:         #0e1014;
+      --surface:    #171a1f;
+      --surface-2:  #1d2027;
+      --border:     #2a2e36;
+      --border-strong: #3a3f48;
+      --text:       #eef1f6;
+      --text-soft:  #cbd1d9;
+      --muted:      #8b94a3;
+      --accent:     #ff7b3e;                 /* slightly brighter for contrast */
+      --accent-ink: #0e1014;
+      --accent-soft: rgba(242, 101, 34, 0.15);
+      --good:       #32a378;
+      --good-soft:  rgba(50, 163, 120, 0.16);
+      --bad:        #e06b4f;
+      --bad-soft:   rgba(224, 107, 79, 0.17);
+      --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.30);
+      --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.40), 0 1px 2px rgba(0, 0, 0, 0.25);
+      --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.50), 0 2px 6px rgba(0, 0, 0, 0.30);
+      color-scheme: dark;
+    }
+
+    /* Respect prefers-color-scheme when the user hasn't explicitly chosen. */
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme]) {
+        --bg:         #0e1014;
+        --surface:    #171a1f;
+        --surface-2:  #1d2027;
+        --border:     #2a2e36;
+        --border-strong: #3a3f48;
+        --text:       #eef1f6;
+        --text-soft:  #cbd1d9;
+        --muted:      #8b94a3;
+        --accent:     #ff7b3e;
+        --accent-ink: #0e1014;
+        --accent-soft: rgba(242, 101, 34, 0.15);
+        --good:       #32a378;
+        --good-soft:  rgba(50, 163, 120, 0.16);
+        --bad:        #e06b4f;
+        --bad-soft:   rgba(224, 107, 79, 0.17);
+        --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.30);
+        --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.40), 0 1px 2px rgba(0, 0, 0, 0.25);
+        --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.50), 0 2px 6px rgba(0, 0, 0, 0.30);
+        color-scheme: dark;
+      }
+    }
+
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        Roboto, Helvetica, Arial, sans-serif;
       background: var(--bg);
-      color: var(--ink);
+      color: var(--text);
       font-size: 14px;
       line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      transition: background-color 0.18s ease, color 0.18s ease;
     }
-    .container { max-width: 960px; margin: 32px auto; padding: 0 16px; }
-    header h1 { margin: 0; font-size: 22px; }
-    header p { color: var(--muted); margin: 4px 0 24px; }
+    ::selection { background: var(--accent-soft); color: var(--text); }
 
+    .container { max-width: 980px; margin: 36px auto 64px; padding: 0 20px; }
+
+    /* ------------------------------------------------------------------ *
+     *  Header + brand
+     * ------------------------------------------------------------------ */
+    header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 16px; margin-bottom: 28px;
+    }
+    .brand {
+      font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1;
+    }
+    .brand .vet { color: var(--text); }
+    .brand .cpa { color: var(--brand-green); }
+    [data-theme="dark"] .brand .cpa,
+    :root:not([data-theme]) .brand .cpa { color: #2fb583; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme]) .brand .cpa { color: #2fb583; }
+    }
+    .tagline { color: var(--muted); margin: 6px 0 0; font-size: 13px; }
+    .tagline .dot { color: var(--border-strong); margin: 0 6px; }
+    .tagline .ani { color: var(--accent); font-weight: 600; letter-spacing: -0.01em; }
+
+    /* Theme + local-only badge on the right */
+    .topbar-right { display: flex; align-items: center; gap: 8px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border-radius: 999px;
+      background: var(--good-soft); color: var(--good);
+      font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .pill::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--good); display: inline-block;
+    }
+    .icon-btn {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text); width: 36px; height: 36px; border-radius: 8px;
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    }
+    .icon-btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
+    .icon-btn:active { transform: scale(0.96); }
+    .icon-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+    /* ------------------------------------------------------------------ *
+     *  Cards
+     * ------------------------------------------------------------------ */
     .card {
-      background: var(--card);
+      background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 20px;
+      border-radius: var(--radius);
+      padding: 22px;
       margin-bottom: 16px;
+      box-shadow: var(--shadow-xs);
     }
+    .card h2 { margin: 0 0 4px; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+    .card .card-sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
 
-    /* Drop zone */
+    /* ------------------------------------------------------------------ *
+     *  Drop zone
+     * ------------------------------------------------------------------ */
     .drop {
-      border: 2px dashed var(--border);
-      border-radius: 8px;
-      padding: 40px 16px;
+      border: 2px dashed var(--border-strong);
+      border-radius: var(--radius);
+      padding: 36px 20px;
       text-align: center;
       color: var(--muted);
-      background: var(--card);
+      background: var(--surface-2);
       cursor: pointer;
-      transition: background 0.12s ease, border-color 0.12s ease;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     }
-    .drop.dragover { background: var(--hover); border-color: var(--accent); color: var(--ink); }
-    .drop strong { color: var(--ink); }
+    .drop:hover { border-color: var(--accent); color: var(--text); }
+    .drop.dragover {
+      background: var(--accent-soft); border-color: var(--accent); color: var(--text);
+    }
+    .drop strong { color: var(--text); font-weight: 600; }
     .drop input[type="file"] { display: none; }
+    .drop-icon {
+      width: 36px; height: 36px; margin: 0 auto 10px;
+      display: block; color: var(--accent);
+    }
+    .drop-icon svg { width: 100%; height: 100%; stroke: currentColor; fill: none; stroke-width: 1.5; }
+    .drop-main { font-size: 15px; }
+    .drop-sub  { font-size: 12px; margin-top: 6px; }
 
-    /* Selected files list */
-    .files { margin: 12px 0 0; padding: 0; list-style: none; }
+    /* ------------------------------------------------------------------ *
+     *  Selected files list
+     * ------------------------------------------------------------------ */
+    .files { margin: 14px 0 0; padding: 0; list-style: none; }
     .files li {
       display: grid;
-      grid-template-columns: minmax(160px, 1.4fr) 1fr minmax(150px, auto) auto auto;
-      gap: 8px;
+      grid-template-columns: minmax(160px, 1.4fr) 1fr minmax(170px, auto) auto auto;
+      gap: 10px;
       align-items: center;
-      padding: 8px 12px;
+      padding: 10px 12px;
       border: 1px solid var(--border);
-      border-radius: 6px;
-      margin-top: 6px;
-      background: #fafafa;
+      border-radius: var(--radius-sm);
+      margin-top: 8px;
+      background: var(--surface-2);
+      transition: border-color 0.15s ease;
     }
-    .files .filename { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+    .files li:hover { border-color: var(--border-strong); }
+    .files .filename { font-weight: 500; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
     .files .size { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
-    .files input[type="text"],
-    .files select {
-      padding: 5px 8px; border: 1px solid var(--border);
-      border-radius: 4px; font-size: 13px; background: #fff;
-      width: 100%;
+    .files input[type="text"], .files select {
+      padding: 6px 10px; border: 1px solid var(--border);
+      border-radius: var(--radius-sm); font-size: 13px;
+      background: var(--surface); color: var(--text);
+      width: 100%; font-family: inherit;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
-    .files input[type="text"]:focus,
-    .files select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    .files input[type="text"]:focus, .files select:focus {
+      outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
     .files button.remove {
       border: none; background: transparent; color: var(--muted);
-      cursor: pointer; font-size: 16px; padding: 0 4px;
+      cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 4px;
     }
-    .files button.remove:hover { color: var(--bad); }
+    .files button.remove:hover { color: var(--bad); background: var(--bad-soft); }
     @media (max-width: 640px) {
       .files li { grid-template-columns: 1fr; }
     }
 
-    /* Options */
-    .options { display: flex; gap: 20px; flex-wrap: wrap; }
-    .options label { display: flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
-    .options input { margin: 0; }
+    /* ------------------------------------------------------------------ *
+     *  Options (checkboxes)
+     * ------------------------------------------------------------------ */
+    .options {
+      display: flex; gap: 18px; flex-wrap: wrap;
+    }
+    .options label {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 7px 12px; border: 1px solid var(--border);
+      border-radius: 999px; background: var(--surface-2);
+      color: var(--text-soft); cursor: pointer; font-size: 13px;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+    .options label:hover { border-color: var(--border-strong); color: var(--text); }
+    .options input[type="checkbox"] {
+      appearance: none; -webkit-appearance: none;
+      width: 16px; height: 16px; border-radius: 4px;
+      border: 1.5px solid var(--border-strong); background: var(--surface);
+      cursor: pointer; position: relative; margin: 0;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .options input[type="checkbox"]:checked {
+      background: var(--accent); border-color: var(--accent);
+    }
+    .options input[type="checkbox"]:checked::after {
+      content: ""; position: absolute; left: 4px; top: 1px;
+      width: 5px; height: 9px; border: solid var(--accent-ink);
+      border-width: 0 2px 2px 0; transform: rotate(45deg);
+    }
+    .options input[type="checkbox"]:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    /* Actions */
+    /* ------------------------------------------------------------------ *
+     *  Actions / buttons
+     * ------------------------------------------------------------------ */
     .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     button.primary {
       background: var(--accent); color: var(--accent-ink);
-      border: none; padding: 10px 18px; border-radius: 6px;
+      border: 1px solid var(--accent); padding: 10px 18px;
+      border-radius: var(--radius-sm);
       font-size: 14px; font-weight: 600; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 8px;
+      transition: background 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+      box-shadow: var(--shadow-xs);
     }
+    button.primary:hover:not(:disabled) { filter: brightness(1.05); box-shadow: var(--shadow-sm); }
+    button.primary:active:not(:disabled) { transform: translateY(1px); }
     button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.primary svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2.2; }
+
     button.secondary {
-      background: var(--card); color: var(--ink);
-      border: 1px solid var(--border); padding: 10px 14px;
-      border-radius: 6px; cursor: pointer; font-size: 14px;
+      background: var(--surface); color: var(--text);
+      border: 1px solid var(--border); padding: 9px 14px;
+      border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 500;
+      transition: background 0.15s ease, border-color 0.15s ease;
     }
-    button.secondary:hover { background: #f3f4f6; }
+    button.secondary:hover { background: var(--surface-2); border-color: var(--border-strong); }
 
-    /* Status area */
-    .status { margin-top: 8px; color: var(--muted); min-height: 20px; }
+    /* ------------------------------------------------------------------ *
+     *  Status + spinner
+     * ------------------------------------------------------------------ */
+    .status { margin-top: 10px; color: var(--muted); min-height: 20px; font-size: 13px; }
     .status.err { color: var(--bad); }
+    .spinner {
+      display: inline-block; width: 12px; height: 12px;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: pdfcsv-spin 0.7s linear infinite;
+      vertical-align: -2px; margin-right: 6px;
+    }
+    @keyframes pdfcsv-spin { to { transform: rotate(360deg); } }
+    .forced-check { opacity: 0.7; cursor: help; }
 
-    /* Summary */
+    /* ------------------------------------------------------------------ *
+     *  Summary cards + per-file table
+     * ------------------------------------------------------------------ */
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 12px;
-      margin-bottom: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px; margin-bottom: 14px;
     }
     .summary-grid .cell {
-      background: #f9fafb; border: 1px solid var(--border);
-      border-radius: 6px; padding: 10px 12px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 12px 14px;
     }
-    .summary-grid .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
-    .summary-grid .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .summary-grid .label {
+      color: var(--muted); font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .summary-grid .value {
+      font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums;
+      margin-top: 2px; letter-spacing: -0.02em;
+    }
+    .summary-grid .value.err { color: var(--bad); }
 
-    /* Per-file table */
     table.perfile { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
     table.perfile th, table.perfile td {
       border-bottom: 1px solid var(--border);
-      padding: 6px 8px; text-align: left;
+      padding: 8px 10px; text-align: left;
     }
-    table.perfile th { color: var(--muted); font-weight: 600; }
-    table.perfile .ok { color: var(--good); }
-    table.perfile .err { color: var(--bad); }
+    table.perfile th { color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: 0.02em; }
+    table.perfile .ok  { color: var(--good); font-weight: 600; }
+    table.perfile .err { color: var(--bad);  font-weight: 600; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    }
+    .badge.ok  { background: var(--good-soft); color: var(--good); }
+    .badge.err { background: var(--bad-soft);  color: var(--bad); }
 
-    /* Results table — editable cells */
-    .rows-wrap { max-height: 520px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+    /* ------------------------------------------------------------------ *
+     *  Editable results table
+     * ------------------------------------------------------------------ */
+    .rows-wrap {
+      max-height: 520px; overflow: auto;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
     table.rows { width: 100%; border-collapse: collapse; font-size: 13px; }
     table.rows th, table.rows td {
       border-bottom: 1px solid var(--border);
-      padding: 4px 6px; text-align: left; vertical-align: top;
+      padding: 6px 8px; text-align: left; vertical-align: top;
     }
-    table.rows thead th { position: sticky; top: 0; background: #f9fafb; color: var(--muted); white-space: nowrap; }
+    table.rows thead th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--surface-2); color: var(--muted);
+      font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+      white-space: nowrap;
+    }
     table.rows input[type="text"], table.rows select {
       width: 100%; border: 1px solid transparent; background: transparent;
-      font: inherit; color: inherit; padding: 3px 5px; border-radius: 3px;
+      font: inherit; color: inherit; padding: 4px 6px;
+      border-radius: 4px; font-family: inherit;
+      transition: border-color 0.15s ease, background 0.15s ease;
     }
     table.rows input[type="text"]:hover, table.rows select:hover { border-color: var(--border); }
     table.rows input[type="text"]:focus, table.rows select:focus {
-      outline: none; border-color: var(--accent); background: #fff;
+      outline: none; border-color: var(--accent); background: var(--surface);
+      box-shadow: 0 0 0 2px var(--accent-soft);
     }
-    table.rows tr.edited td { background: #fffbeb; }   /* yellow tint */
-    table.rows tr.added td { background: #ecfdf5; }    /* green tint */
-    table.rows td.amount-col input { text-align: right; font-variant-numeric: tabular-nums; }
+    table.rows tr.edited td { background: var(--accent-soft); }
+    table.rows tr.added  td { background: var(--good-soft); }
+    table.rows td.amount-col input {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
     table.rows td.amount-neg input { color: var(--bad); }
     table.rows td.row-actions { text-align: right; width: 36px; }
     table.rows td.row-actions button {
       border: none; background: transparent; color: var(--muted);
-      cursor: pointer; font-size: 14px; padding: 2px 4px;
+      cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px;
     }
-    table.rows td.row-actions button:hover { color: var(--bad); }
-    .edit-status { color: var(--muted); font-size: 12px; margin-left: 8px; }
+    table.rows td.row-actions button:hover { color: var(--bad); background: var(--bad-soft); }
+
+    .edit-status { color: var(--muted); font-size: 12px; margin-left: 4px; }
     .edit-status.dirty { color: var(--accent); font-weight: 600; }
 
+    /* ------------------------------------------------------------------ *
+     *  Footer + misc
+     * ------------------------------------------------------------------ */
+    footer {
+      text-align: center; color: var(--muted); font-size: 12px;
+      margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+    }
+    footer strong { color: var(--text-soft); }
+
     .hidden { display: none !important; }
-    .hint { color: var(--muted); font-size: 12px; }
+    .hint   { color: var(--muted); font-size: 12px; }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
-      <h1>pdf-to-csv</h1>
-      <p>Drop bank/credit-card statement PDFs to extract transactions into a unified CSV.</p>
+      <div>
+        <div class="brand"><span class="vet">Vet</span><span class="cpa">CPA</span></div>
+        <p class="tagline">
+          Statement extraction
+          <span class="dot">·</span>
+          by <span class="ani">ANI.ML Health</span>
+        </p>
+      </div>
+      <div class="topbar-right">
+        <span class="pill" title="All processing happens on this device. No cloud APIs, no LLMs.">Local only</span>
+        <button class="icon-btn" id="themeToggle" aria-label="Toggle theme" title="Toggle light/dark mode">
+          <svg id="themeIconSun" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke-linecap="round"/>
+          </svg>
+          <svg id="themeIconMoon" viewBox="0 0 24 24" aria-hidden="true" style="display:none;">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
     </header>
 
     <div class="card">
@@ -181,14 +439,19 @@
           multiple
           accept="application/pdf,.pdf,.jpg,.jpeg,image/jpeg,.png,image/png,.tif,.tiff,image/tiff,.bmp,image/bmp,.heic,.heif,image/heic,image/heif"
         />
-        <div>
-          <div><strong>Drop PDFs or photos here</strong> or click to browse</div>
-          <div class="hint">Statements, receipts, phone photos, or scans. Accepted: PDF, JPG, PNG, TIFF, BMP, HEIC.</div>
-        </div>
+        <span class="drop-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke-linecap="round" stroke-linejoin="round"/>
+            <polyline points="17 8 12 3 7 8" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="12" y1="3" x2="12" y2="15" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div class="drop-main"><strong>Drop statements here</strong> or click to browse</div>
+        <div class="drop-sub">PDFs · scans · phone photos — PDF, JPG, PNG, TIFF, BMP, HEIC</div>
       </label>
       <ul class="files" id="fileList"></ul>
       <p class="hint" id="fileListHint" style="margin:10px 0 0;display:none;">
-        Edit the title for each statement and pick an account type (leave as <em>Auto-detect</em> to let the app guess from the text).
+        Edit the title for each statement and pick an account type (leave as <em>Auto-detect</em> to let the app guess from the document).
       </p>
     </div>
 
@@ -196,27 +459,30 @@
       <div class="options">
         <label><input type="checkbox" id="optDedupe" checked /> Dedupe duplicate rows across files</label>
         <label><input type="checkbox" id="optIncludeSource" /> Include source columns (audit)</label>
-        <label><input type="checkbox" id="optOcr" /> Enable OCR (for scanned PDFs)</label>
+        <label id="optOcrLabel"><input type="checkbox" id="optOcr" /> <span id="optOcrText">Enable OCR (for scanned PDFs)</span></label>
       </div>
     </div>
 
     <div class="actions">
-      <button class="primary" id="submitBtn" disabled>Extract transactions</button>
+      <button class="primary" id="submitBtn" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Extract transactions
+      </button>
       <span class="status" id="status"></span>
     </div>
 
     <div class="card hidden" id="resultsCard">
-      <h2 style="margin-top:0;font-size:16px;">Results</h2>
+      <h2>Results</h2>
+      <p class="card-sub" id="byParser"></p>
       <div class="summary-grid" id="summaryGrid"></div>
-      <div id="byParser" class="hint" style="margin-bottom:12px;"></div>
       <table class="perfile" id="perFile"></table>
 
-      <p class="hint" style="margin:16px 0 0;">
+      <p class="hint" style="margin:20px 0 10px;">
         <strong>Edit any cell</strong> to correct the extraction. Changes are tracked automatically —
-        click <em>Save corrections</em> to persist the diff for future pipeline improvements, and
-        <em>Download CSV / Excel</em> to get the corrected output.
+        click <em>Save corrections</em> to persist the diff, and
+        <em>Download CSV / Excel</em> for the corrected output.
       </p>
-      <div class="actions" style="margin:10px 0 12px;">
+      <div class="actions" style="margin:6px 0 14px;">
         <button class="secondary" id="addRowBtn">+ Add row</button>
         <button class="primary" id="saveFeedbackBtn" disabled>Save corrections</button>
         <button class="secondary" id="downloadCsvBtn">Download CSV</button>
@@ -228,10 +494,55 @@
         <table class="rows" id="rowsTable"></table>
       </div>
     </div>
+
+    <footer>
+      <strong>VetCPA</strong> runs entirely on this device — no LLM calls, no cloud uploads.
+      Built by <span style="color: var(--accent); font-weight: 600;">ANI.ML&nbsp;Health</span>.
+    </footer>
   </div>
 
   <script>
     "use strict";
+
+    // ---------------------------------------------------------------------
+    // Theme management — "system" (default), "light", "dark". Respects
+    // prefers-color-scheme when system, persists explicit choice to
+    // localStorage so reloads stay in the chosen mode.
+    // ---------------------------------------------------------------------
+    const THEME_KEY = "vetcpa-theme";
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+    function storedTheme() { return localStorage.getItem(THEME_KEY) || "system"; }
+    function resolvedTheme() {
+      const t = storedTheme();
+      return t === "system" ? (prefersDark.matches ? "dark" : "light") : t;
+    }
+    function applyTheme(theme) {
+      if (theme === "system") {
+        document.documentElement.removeAttribute("data-theme");
+        localStorage.removeItem(THEME_KEY);
+      } else {
+        document.documentElement.setAttribute("data-theme", theme);
+        localStorage.setItem(THEME_KEY, theme);
+      }
+      paintThemeIcon();
+    }
+    function paintThemeIcon() {
+      const isDark = resolvedTheme() === "dark";
+      document.getElementById("themeIconSun").style.display = isDark ? "" : "none";
+      document.getElementById("themeIconMoon").style.display = isDark ? "none" : "";
+      document.getElementById("themeToggle").title =
+        `Switch to ${isDark ? "light" : "dark"} mode`;
+    }
+    // Initial paint + follow system-preference changes when the user hasn't
+    // locked in an explicit choice.
+    applyTheme(storedTheme());
+    prefersDark.addEventListener("change", () => {
+      if (storedTheme() === "system") paintThemeIcon();
+    });
+    document.getElementById("themeToggle").addEventListener("click", () => {
+      applyTheme(resolvedTheme() === "dark" ? "light" : "dark");
+    });
 
     // Each entry: { file: File, title: string, accountType: string }
     // accountType "" means auto-detect (server will fill from doc text).
@@ -345,6 +656,29 @@
       submitBtn.disabled = state.entries.length === 0;
       document.getElementById("fileListHint").style.display =
         state.entries.length > 0 ? "block" : "none";
+      updateOcrUi();
+    }
+
+    // OCR is always applied to image inputs by Docling's image pipeline — the
+    // `?ocr=` flag only affects PDFs. When any image/HEIC is queued, force
+    // the checkbox on and disable it so the UI doesn't mislead.
+    function updateOcrUi() {
+      const ocr = $("optOcr");
+      const label = $("optOcrLabel");
+      const text = $("optOcrText");
+      const anyImage = state.entries.some(e => extOf(e.file.name) !== ".pdf");
+      if (anyImage) {
+        ocr.checked = true;
+        ocr.disabled = true;
+        label.classList.add("forced-check");
+        label.title = "OCR is always applied to image and HEIC inputs.";
+        text.textContent = "OCR (auto-enabled — image input detected)";
+      } else {
+        ocr.disabled = false;
+        label.classList.remove("forced-check");
+        label.title = "";
+        text.textContent = "Enable OCR (for scanned PDFs)";
+      }
     }
 
     fileInput.addEventListener("change", (e) => addFiles(e.target.files));
@@ -368,8 +702,9 @@
     // --- Submit -----------------------------------------------------------
     submitBtn.addEventListener("click", async () => {
       if (state.entries.length === 0) return;
-      setStatus(`Uploading and extracting ${state.entries.length} PDF(s)...`);
       submitBtn.disabled = true;
+      const n = state.entries.length;
+      startProgress(`Uploading and extracting ${n} file${n === 1 ? "" : "s"}`);
 
       try {
         const t0 = performance.now();
@@ -380,9 +715,12 @@
         }
         const data = await res.json();
         const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+        stopProgress();
         renderResults(data);
-        setStatus(`Done in ${elapsed}s.`);
+        const nRows = (data.rows || []).length;
+        setStatus(`Extracted ${nRows} row${nRows === 1 ? "" : "s"} in ${elapsed}s.`);
       } catch (e) {
+        stopProgress();
         setStatus(`Error: ${e.message || e}`, true);
       } finally {
         submitBtn.disabled = state.entries.length === 0;
@@ -399,7 +737,7 @@
         setStatus("Nothing to download — extract a statement first.", true);
         return;
       }
-      setStatus(`Building ${format.toUpperCase()}...`);
+      startProgress(`Building ${format.toUpperCase()}`);
       try {
         const res = await fetch("/export", {
           method: "POST",
@@ -409,9 +747,11 @@
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readError(res)}`);
         const blob = await res.blob();
         const filename = format === "excel" ? "transactions.xlsx" : "transactions.csv";
+        stopProgress();
         triggerDownload(blob, filename);
         setStatus(`Downloaded ${filename}.`);
       } catch (e) {
+        stopProgress();
         setStatus(`Error: ${e.message || e}`, true);
       }
     }
@@ -660,7 +1000,7 @@
       const records = pendingFeedbackRecords();
       if (records.length === 0) return;
       $("saveFeedbackBtn").disabled = true;
-      setStatus(`Saving ${records.length} correction(s)...`);
+      startProgress(`Saving ${records.length} correction${records.length === 1 ? "" : "s"}`);
       try {
         const res = await fetch("/feedback", {
           method: "POST",
@@ -669,7 +1009,8 @@
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readError(res)}`);
         const body = await res.json();
-        setStatus(`Saved ${body.saved} correction(s).`);
+        stopProgress();
+        setStatus(`Saved ${body.saved} correction${body.saved === 1 ? "" : "s"}.`);
         // After a successful save, re-baseline: every "current" becomes the
         // new "original", deletions drop out, additions become saved rows.
         rowState = rowState
@@ -682,6 +1023,7 @@
         renderRowsTable();
         updateEditStatus();
       } catch (e) {
+        stopProgress();
         setStatus(`Error: ${e.message || e}`, true);
         $("saveFeedbackBtn").disabled = false;
       }
@@ -714,6 +1056,29 @@
     function setStatus(msg, isError) {
       statusEl.textContent = msg;
       statusEl.classList.toggle("err", !!isError);
+    }
+
+    // Live progress: shows a spinner + elapsed-seconds counter while a
+    // long-running fetch is in flight. Also surfaces progressively more
+    // specific copy as the wait drags on — Docling's first-call model load
+    // can add ~10-20s on cold start, and users otherwise just see "stuck."
+    let progressTimer = null;
+    function startProgress(baseMsg) {
+      stopProgress();
+      const t0 = performance.now();
+      const tick = () => {
+        const s = Math.floor((performance.now() - t0) / 1000);
+        let msg = `${baseMsg} (${s}s)`;
+        if (s >= 15) msg += " — first call loads OCR/Docling models, please wait";
+        else if (s >= 5) msg += " — extracting tables from your document";
+        statusEl.classList.remove("err");
+        statusEl.innerHTML = `<span class="spinner" aria-hidden="true"></span>${escapeHtml(msg)}`;
+      };
+      tick();
+      progressTimer = setInterval(tick, 500);
+    }
+    function stopProgress() {
+      if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
     }
 
     function formatSize(n) {
