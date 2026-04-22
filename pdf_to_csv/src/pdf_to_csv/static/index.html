@@ -172,11 +172,22 @@
 
     /* ------------------------------------------------------------------ *
      *  Drop zone
+     *
+     *  `display: flex` is load-bearing: a <label> is inline by default,
+     *  and when its block children wrap the browser draws fragmented
+     *  borders on each wrapped line (the "ghost bracket" artifact on
+     *  the left edge). Flex makes it a proper container.
      * ------------------------------------------------------------------ */
     .drop {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 180px;
       border: 2px dashed var(--border-strong);
       border-radius: var(--radius);
-      padding: 36px 20px;
+      padding: 28px 20px;
       text-align: center;
       color: var(--muted);
       background: var(--surface-2);
@@ -190,12 +201,13 @@
     .drop strong { color: var(--text); font-weight: 600; }
     .drop input[type="file"] { display: none; }
     .drop-icon {
-      width: 36px; height: 36px; margin: 0 auto 10px;
-      display: block; color: var(--accent);
+      width: 36px; height: 36px; color: var(--accent);
+      display: inline-flex; align-items: center; justify-content: center;
+      margin-bottom: 4px;
     }
     .drop-icon svg { width: 100%; height: 100%; stroke: currentColor; fill: none; stroke-width: 1.5; }
     .drop-main { font-size: 15px; }
-    .drop-sub  { font-size: 12px; margin-top: 6px; }
+    .drop-sub  { font-size: 12px; }
 
     /* ------------------------------------------------------------------ *
      *  Selected files list
@@ -394,13 +406,21 @@
     .edit-status.dirty { color: var(--accent); font-weight: 600; }
 
     /* ------------------------------------------------------------------ *
-     *  Footer + misc
+     *  Footer + ANI.ML logo
      * ------------------------------------------------------------------ */
     footer {
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
       text-align: center; color: var(--muted); font-size: 12px;
-      margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+      margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border);
     }
     footer strong { color: var(--text-soft); }
+
+    .animl-logo { height: 38px; width: auto; display: block; }
+    .animl-logo .mark-bar   { stroke: #f26522; stroke-width: 14; stroke-linecap: round; fill: none; }
+    .animl-logo .mark-dot   { fill: #d4491c; }
+    .animl-logo .ani-text   { font-family: ui-sans-serif, -apple-system, sans-serif; font-weight: 800; font-size: 28px; letter-spacing: -1px; fill: var(--text); }
+    .animl-logo .ml-text    { fill: #f26522; }
+    .animl-logo .health-text{ font-family: ui-sans-serif, -apple-system, sans-serif; font-weight: 500; font-size: 14px; letter-spacing: 2px; fill: var(--muted); }
 
     .hidden { display: none !important; }
     .hint   { color: var(--muted); font-size: 12px; }
@@ -496,8 +516,20 @@
     </div>
 
     <footer>
-      <strong>VetCPA</strong> runs entirely on this device — no LLM calls, no cloud uploads.
-      Built by <span style="color: var(--accent); font-weight: 600;">ANI.ML&nbsp;Health</span>.
+      <div>
+        <strong>VetCPA</strong> runs entirely on this device — no LLM calls, no cloud uploads.
+      </div>
+      <a href="https://animl.health" target="_blank" rel="noreferrer noopener" aria-label="ANI.ML Health" style="text-decoration:none;">
+        <svg class="animl-logo" viewBox="0 0 210 70" xmlns="http://www.w3.org/2000/svg">
+          <!-- Chevron mark: two rounded bars forming a ^, plus the brand's accent dot. -->
+          <line class="mark-bar" x1="14" y1="58" x2="38" y2="14" />
+          <line class="mark-bar" x1="38" y1="14" x2="62" y2="58" />
+          <circle class="mark-dot" cx="62" cy="58" r="7" />
+          <!-- Wordmark: "ANI" (theme-aware) + ".ML" (orange) + "HEALTH" (muted). -->
+          <text class="ani-text" x="82" y="40">ANI<tspan class="ml-text">.ML</tspan></text>
+          <text class="health-text" x="82" y="60">HEALTH</text>
+        </svg>
+      </a>
     </footer>
   </div>
 
