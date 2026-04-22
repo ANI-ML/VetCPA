@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Sensitive / local-only data — never bake into images
+samples/*
+!samples/.gitkeep
+out/
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+*.xlsx
+!tests/fixtures/*.csv
+
+# Editor / OS noise
+.vscode/
+.idea/
+.claude/
+.DS_Store
+*.swp
+
+# Tests don't ship to the image
+tests/
+
+# PyInstaller artifacts
+VetCPA.spec
+build/
+dist/

@@ -24,13 +24,142 @@ Rows are sorted by `(StatementTitle, Date)` so statements appear as grouped bloc
 - **Images** — JPG / JPEG / PNG / TIFF / BMP. Docling routes these through its image pipeline with OCR on by default.
 - **HEIC / HEIF** — iPhone photos work natively; we convert them to JPEG on the way in (via `pillow-heif`). The original `.heic` filename is preserved in the `source_file` audit column.
 
-Three ways to use it — **CLI** for batch jobs, **drag-and-drop web UI** at `/`, and **JSON/CSV/Excel HTTP API** at `/extract`.
+Three ways to use it — **drag-and-drop web UI**, **CLI** for batch jobs, and **JSON/CSV/Excel HTTP API**.
 
 ## Status
 
-**v0.1.0 pilot — all 8 build steps complete.** 86 tests passing. Verified end-to-end against a real Scotiabank Passport Visa statement; see [Known limitations](#known-limitations) for the edge cases worth spot-checking.
+**v0.1.0 pilot.** 148 tests passing. Verified end-to-end against a real Scotiabank Passport Visa (PDF) and a real Scotia chequing photo (HEIC). Every row the accountant sees is tagged with which parser produced it (`source_bank`) so fallback rows can be scrutinised.
 
-## Prerequisites
+## Running VetCPA
+
+There are two supported ways to run VetCPA on a laptop/desktop/server, both fully local. **Pick the one that matches who's running the app.**
+
+| Option | Who it's for | What they need installed | First-run download |
+| --- | --- | --- | --- |
+| **A. Desktop app (`VetCPA.app`)** | Accountants and non-technical users | Nothing | ~2 GB of Docling ML models on first launch |
+| **B. Docker container** | Devs, small team servers, EC2 pilots | Docker Desktop (or engine) | Same ~2 GB, cached into a named volume |
+
+Both execute entirely on the local machine. No LLM calls, no third-party APIs. The one network event is the one-time Docling model download from HuggingFace on first launch; after that, VetCPA works offline.
+
+---
+
+### Option A — Desktop app (macOS + Windows)
+
+**For the accountant:** they receive a native app and double-click to launch. The default browser opens to the VetCPA UI. No terminal, no setup steps.
+
+Builds happen **on the target platform** — macOS to produce a `.app`/`.dmg`, Windows to produce an `.exe` folder. You can't cross-compile.
+
+#### macOS — producing `VetCPA.app` and a `.dmg`
+
+```bash
+cd pdf_to_csv
+make install-dev                   # prepares .venv with all deps
+./scripts/build_macos.sh           # -> dist/VetCPA.app
+./scripts/make_dmg.sh              # -> dist/VetCPA-0.1.0.dmg (optional, nicer handoff)
+```
+
+You'll get `dist/VetCPA.app` (~1.5–2 GB without bundled models, ~3.5–4 GB with them) and optionally a single `VetCPA-0.1.0.dmg` you can AirDrop / email / drop on a shared drive.
+
+Launch:
+
+```bash
+open dist/VetCPA.app
+# or double-click VetCPA.app in Finder; or for the .dmg, double-click
+# to mount, drag VetCPA to Applications, then open from /Applications
+```
+
+The first time macOS opens an unsigned `.app`, right-click → **Open** to bypass Gatekeeper's "unidentified developer" prompt. Proper code signing needs an Apple Developer Program account ($99/year) and is a separate step.
+
+#### Windows — producing `VetCPA\VetCPA.exe`
+
+On a Windows machine with Python 3.11:
+
+```powershell
+cd pdf_to_csv
+py -3.11 -m venv .venv
+.\.venv\Scripts\pip install -e ".[dev,bundle]"
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
+```
+
+You'll get `dist\VetCPA\` containing `VetCPA.exe` and its support files. Zip `dist\VetCPA\` and hand off the whole folder to the user; they unzip and double-click `VetCPA.exe`. (A proper Windows installer — `.msi` via WiX or self-extracting `.exe` via Inno Setup — is a follow-up if you want the full install experience; ask and we'll add it.)
+
+SmartScreen will warn on the first launch of an unsigned `.exe`; user clicks "More info" → "Run anyway". Code signing for Windows uses an Authenticode certificate (~$200–400/year) and is also a separate step.
+
+#### Fully offline build (both platforms)
+
+To bake the Docling models into the bundle so the first launch doesn't need internet:
+
+```bash
+# macOS — warm the cache once, then rebuild with the flag
+.venv/bin/pdf-to-csv inspect samples/scotiabank_april_2025.pdf
+VETCPA_BUNDLE_MODELS=1 ./scripts/build_macos.sh
+```
+
+```powershell
+# Windows — same pattern
+.\.venv\Scripts\pdf-to-csv inspect samples\scotiabank_april_2025.pdf
+$env:VETCPA_BUNDLE_MODELS = "1"
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
+```
+
+The bundled artefact grows by the model size (~2 GB) but launches fully offline from day one — no network touched, ever.
+
+---
+
+### Option B — Docker container
+
+**For devs / shared team servers / EC2 pilots.** One command builds, one command runs, data persists in a local `./data/` directory.
+
+**Prerequisites:** Docker Desktop (macOS / Windows) or the Docker engine (Linux).
+
+**First run:**
+
+```bash
+cd pdf_to_csv
+docker compose up             # builds the image on first run, starts the server
+```
+
+Then open **http://localhost:8000** in a browser. The first extraction takes ~15–30 s longer than subsequent runs while Docling downloads its models (cached in a named volume, so only once per machine).
+
+**Subsequent runs:**
+
+```bash
+docker compose up -d          # detached — runs in the background
+docker compose logs -f        # tail the server log
+docker compose down           # stop + remove the container
+```
+
+**What's in the container:**
+
+- Python 3.11, Docling, pillow-heif, all runtime deps
+- Non-root `vetcpa` user owns everything writable
+- PyTorch CPU-only wheels (no CUDA — keeps the image ~3 GB smaller; the pipeline is CPU-bound on single-user desktops anyway)
+- `libheif` system libraries so iPhone HEIC uploads work out of the box
+- Docling models **not** baked in by default — they download to the `vetcpa-models` named volume on first extract (persist across restarts). See "Fully offline image" below for baking them in.
+
+**What persists between restarts:**
+
+- `./data/feedback.db` — SQLite store of user corrections (mounted from host)
+- `vetcpa-models` named volume — downloaded Docling model weights (~2 GB)
+
+**Fully offline image** — if the target machine can't reach HuggingFace (e.g. air-gapped pilot), add a `RUN` step that pre-downloads the models at build time. Untested here because our pilot machines have internet; ask and I'll add it.
+
+**EC2 pilot deploy:**
+
+```bash
+ssh you@ec2-instance
+git clone https://github.com/ANI-ML/VetCPA.git && cd VetCPA/pdf_to_csv
+docker compose up -d
+# Open http://<ec2-public-ip>:8000 or bind behind nginx for TLS
+```
+
+Minimum sizing: **t3.medium** (4 GB RAM) or larger — Docling's image pipeline allocates a chunk of memory during OCR.
+
+---
+
+## Developer setup (editable install)
+
+Skip this section if you're just running the app via the options above.
 
 - macOS (Mac Studio for dev; Linux for EC2 deploy).
 - **Python 3.11+**. System Python on older macOS is 3.9; install a newer one via Homebrew:
@@ -40,8 +169,6 @@ brew install python@3.11
 ```
 
 - ~2 GB free disk — Docling downloads ML models on first run.
-
-## Install
 
 Using the Makefile (creates `.venv`, installs package + dev deps in editable mode):
 
@@ -56,6 +183,12 @@ Or the plain-venv equivalent:
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+```
+
+For PyInstaller bundling:
+
+```bash
+pip install -e ".[dev,bundle]"
 ```
 
 ## CLI

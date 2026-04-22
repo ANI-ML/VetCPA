@@ -1,0 +1,24 @@
+# One-command VetCPA deploy. Nothing here depends on external services.
+#
+#   docker compose up        # builds if needed, starts the app at :8000
+#   docker compose up -d     # detached (run in background)
+#   docker compose down      # stop + remove the container
+#   docker compose logs -f   # tail the server log
+
+services:
+  vetcpa:
+    build: .
+    image: vetcpa:latest
+    container_name: vetcpa
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist the feedback-correction SQLite store across restarts.
+      - ./data:/app/data
+      # Cache downloaded Docling models so the first-run ~2 GB pull happens
+      # once per machine, not once per container.
+      - vetcpa-models:/home/vetcpa/.cache
+    restart: unless-stopped
+
+volumes:
+  vetcpa-models:
