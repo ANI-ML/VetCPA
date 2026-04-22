@@ -40,113 +40,90 @@ Rows are sorted by `(StatementTitle, Date)`. Optional audit columns `source_bank
 
 ---
 
-## Running VetCPA — two options
+## Install
 
-**Both options run entirely on the local machine.** Pick based on who's sitting at the keyboard.
+### 🍎 macOS — download and drag
 
-| Option | Who it's for | Prerequisites | First-run download |
-| --- | --- | --- | --- |
-| **A. Desktop app** (`VetCPA.app` / `VetCPA.exe`) | Accountants, non-technical users | Nothing | ~2 GB of Docling ML models on first launch |
-| **B. Docker container** | Developers, team servers, EC2 pilots | Docker Desktop | Same ~2 GB, cached in a named volume |
+1. **[Download `VetCPA-0.1.0.dmg`](https://github.com/ANI-ML/VetCPA/releases/latest)** from the Releases page.
+2. **Double-click the `.dmg`** to open it. A Finder window pops up with the **VetCPA** app and an **Applications** shortcut side by side.
+3. **Drag VetCPA into Applications.** Eject the disk image.
+4. **Launch from Applications or Launchpad.** Your browser opens automatically to the VetCPA UI.
 
-The one network event either option makes is a one-time download of Docling's open-source ML model weights from HuggingFace Hub on first launch. After that the app works offline indefinitely. See [Fully offline builds](#fully-offline-builds) to skip even that.
+> **First time only:** macOS will say "VetCPA cannot be opened because the developer cannot be verified." This is because we haven't paid for Apple's code-signing program yet. **Right-click VetCPA → Open → Open.** Do this once; every later launch is a normal double-click.
 
----
+That's it. Start dragging PDFs or phone photos onto the drop zone.
 
-## Option A — Desktop app
+**What happens on first use:** VetCPA downloads ~2 GB of OCR models from HuggingFace the first time you extract a statement. This takes a few minutes and happens once per machine. Every launch after that is fully offline — no network needed.
 
-### For the accountant
+### 🪟 Windows — build from source
 
-Double-click the app you were sent. The default browser opens to the VetCPA UI. A small terminal window stays open behind the scenes — that's the server. Close it to quit the app.
-
-First launch on an unsigned build:
-- **macOS**: right-click `VetCPA.app` → **Open** (bypasses "unidentified developer" warning once; subsequent launches are normal double-clicks)
-- **Windows**: SmartScreen prompt → **More info** → **Run anyway** (same one-time acknowledgement)
-
-### For the developer — building the app
-
-The desktop app is built **per target platform**. You can't cross-compile — build macOS on a Mac, Windows on a Windows machine.
-
-#### macOS build
-
-```bash
-cd pdf_to_csv
-make install-dev                    # one-time: builds .venv, installs all deps
-./scripts/build_macos.sh            # produces dist/VetCPA.app  (15-25 min)
-./scripts/make_dmg.sh               # optional: wraps it as dist/VetCPA-0.1.0.dmg
-```
-
-- `VetCPA.app` weighs in around **700 MB** without bundled models, **~3 GB** with them.
-- Hand off the `.dmg` (single file, drag-install UX) for the cleanest accountant experience.
-
-#### Windows build
-
-On a Windows machine with Python 3.11:
+A pre-built Windows installer isn't in this release yet. If you have a Windows PC with Python 3.11:
 
 ```powershell
-cd pdf_to_csv
+git clone https://github.com/ANI-ML/VetCPA.git
+cd VetCPA\pdf_to_csv
 py -3.11 -m venv .venv
 .\.venv\Scripts\pip install -e ".[dev,bundle]"
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 ```
 
-- Produces `dist\VetCPA\` containing `VetCPA.exe` plus support files.
-- Zip `dist\VetCPA\` and hand off the whole folder; the user unzips and double-clicks `VetCPA.exe`.
+The build lands in `dist\VetCPA\`. Double-click `VetCPA.exe` to launch. Windows SmartScreen will ask for confirmation on first run — click **More info** → **Run anyway**.
 
-### Fully offline builds
+### 🐳 Docker — for devs, team servers, EC2
 
-To bake the Docling models into the bundle so first launch doesn't hit HuggingFace:
+If you're running VetCPA on a shared machine or prefer a container:
 
 ```bash
-# macOS
-.venv/bin/pdf-to-csv inspect samples/scotiabank_april_2025.pdf   # warms ~/.cache/docling
+git clone https://github.com/ANI-ML/VetCPA.git
+cd VetCPA/pdf_to_csv
+docker compose up
+```
+
+Open **http://localhost:8000**. Shut down with `Ctrl-C` or `docker compose down`.
+
+What persists between restarts:
+- `./data/feedback.db` — the accountant's corrections (host-mounted)
+- `vetcpa-models` named volume — the downloaded OCR models (~2 GB, one-time)
+
+EC2 sizing floor: **t3.medium** (2 vCPU, 4 GB RAM).
+
+---
+
+## Building the installer yourself
+
+Most people should just download the DMG from Releases. If you want to **build a fresh `.app` / `.dmg` from source** (e.g. to bundle different models, or to code-sign it):
+
+### macOS
+
+```bash
+git clone https://github.com/ANI-ML/VetCPA.git
+cd VetCPA/pdf_to_csv
+make install-dev                    # one-time: builds .venv, installs all deps
+./scripts/build_macos.sh            # produces dist/VetCPA.app  (15-25 min)
+./scripts/make_dmg.sh               # wraps it as dist/VetCPA-0.1.0.dmg
+```
+
+- `VetCPA.app` is **~700 MB** without bundled models, **~3 GB** with them.
+- The `.dmg` is a single file ideal for sharing over AirDrop / a shared drive.
+
+### Fully offline build
+
+To bake the OCR models into the `.app` / `.exe` so first launch doesn't hit the network:
+
+```bash
+# macOS — warm the model cache once, then rebuild with the flag
+.venv/bin/pdf-to-csv inspect pdf_to_csv/samples/any-pdf.pdf
 VETCPA_BUNDLE_MODELS=1 ./scripts/build_macos.sh
 ```
 
 ```powershell
-# Windows
-.\.venv\Scripts\pdf-to-csv inspect samples\scotiabank_april_2025.pdf
+# Windows — same pattern
+.\.venv\Scripts\pdf-to-csv inspect pdf_to_csv\samples\any-pdf.pdf
 $env:VETCPA_BUNDLE_MODELS = "1"
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 ```
 
 The resulting bundle is ~2 GB heavier but **never touches the network**.
-
----
-
-## Option B — Docker container
-
-One command builds the image, one command runs it. The accountant's browser hits `http://localhost:8000` and looks identical to the desktop app.
-
-```bash
-cd pdf_to_csv
-docker compose up                 # builds on first run, starts the server
-```
-
-Then open **http://localhost:8000**. Shut down with `Ctrl-C` or `docker compose down`.
-
-### What's in the image
-
-- Python 3.11 slim
-- Docling + PyTorch CPU wheels (no CUDA — saves ~3 GB and isn't needed on single-user desktops)
-- libheif / libgl / libglib runtime libraries for HEIC and OCR
-- Non-root `vetcpa` user owns everything writable
-
-### What persists between restarts
-
-- `./data/feedback.db` — SQLite store of the accountant's corrections (host-mounted)
-- `vetcpa-models` named volume — downloaded Docling weights (~2 GB, one-time)
-
-### EC2 pilot deploy
-
-```bash
-ssh you@ec2-instance
-git clone https://github.com/ANI-ML/VetCPA.git && cd VetCPA/pdf_to_csv
-docker compose up -d
-# Browse http://<ec2-ip>:8000, or front with nginx for TLS
-```
-
-Sizing floor: **t3.medium** (2 vCPU, 4 GB RAM). Docling's OCR pipeline allocates a chunk of memory during image extraction.
 
 ---
 
