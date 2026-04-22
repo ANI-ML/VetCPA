@@ -152,6 +152,57 @@ def test_rows_tagged_with_source_bank() -> None:
     assert all(t.source_bank == "generic_table" for t in txns)
 
 
+def test_parses_scotia_chequing_online_export_layout() -> None:
+    """Regression test for the Scotia 'Account Details' online export —
+    weekday-prefixed dates, +$/-$ amount signs, multi-line descriptions,
+    and Withdrawals/Deposits/Balance column layout. Was returning 0 rows
+    in v0.1.5 because neither the date format nor the `+$` amount
+    regex matched."""
+    table = _table(
+        ["Date", "Description", "Withdrawals", "Deposits", "Balance"],
+        [
+            ["Wed, Apr. 22, 2026", "Miscellaneous Payment\nPinard Christopher Joseph",
+             "", "+$3,578.05", "$14,768.57"],
+            ["Tue, Apr. 21, 2026", "Customer Transfer Dr.\nPc To 4538170641216019",
+             "-$3,000.00", "", "$11,190.52"],
+            ["Wed, Apr. 15, 2026", "Miscellaneous Payment\nAni.Ml Health Inc.",
+             "", "+$478.88", "$13,890.52"],
+            ["Tue, Apr. 14, 2026", "Service Charge\nInterac E-Transfer Fee",
+             "-$1.00", "", "$13,411.64"],
+        ],
+    )
+    parsed = ParsedPDF(tables=[table], text="Business Chequing - ****9313")
+
+    txns = GenericTableParser().extract_transactions(parsed)
+
+    assert len(txns) == 4, f"expected 4 rows, got {len(txns)}: {txns!r}"
+    amounts = [t.Amount for t in txns]
+    assert amounts[0] == Decimal("3578.05")   # +$ deposit
+    assert amounts[1] == Decimal("-3000.00")  # -$ withdrawal
+    assert amounts[2] == Decimal("478.88")    # +$ deposit
+    assert amounts[3] == Decimal("-1.00")     # -$ withdrawal
+    # Dates round-trip through the weekday-prefixed format.
+    assert txns[0].Date.isoformat() == "2026-04-22"
+    assert txns[3].Date.isoformat() == "2026-04-14"
+    # Balance column must not bleed in as amounts.
+    for t in txns:
+        assert t.Amount not in {Decimal("14768.57"), Decimal("11190.52")}
+
+
+def test_try_parse_amount_accepts_leading_plus() -> None:
+    assert _try_parse_amount("+$3,578.05") == Decimal("3578.05")
+    assert _try_parse_amount("+478.88") == Decimal("478.88")
+    assert _try_parse_amount("+$0.01") == Decimal("0.01")
+
+
+def test_try_parse_date_accepts_weekday_prefixed_formats() -> None:
+    # Scotia online export format
+    d = _try_parse_date("Wed, Apr. 22, 2026")
+    assert d is not None and d.isoformat() == "2026-04-22"
+    d = _try_parse_date("Monday, March 22 2026")
+    assert d is not None and d.isoformat() == "2026-03-22"
+
+
 def test_parses_chequing_debit_credit_balance_layout() -> None:
     # Chequing/savings layout: three numeric columns — Withdrawals (debit),
     # Deposits (credit), and a running Balance. The generic parser should

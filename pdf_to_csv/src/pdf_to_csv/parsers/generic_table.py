@@ -35,13 +35,22 @@ from pdf_to_csv.parsers.base_parser import BaseParser
 # (regex, tuple_of_strptime_formats). Multiple formats per regex let a single
 # pattern cover both abbreviated ("Mar") and full ("March") month names
 # without duplicating the regex.
+#
+# Regexes are evaluated against the *normalised* string — commas, periods,
+# and leading "+" removed — so we can write them cleanly without having to
+# spell out every punctuation variant the input might arrive with.
 _DATE_FORMATS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
     (re.compile(r"^\d{4}-\d{2}-\d{2}$"), ("%Y-%m-%d",)),
     (re.compile(r"^\d{2}/\d{2}/\d{4}$"), ("%m/%d/%Y",)),
     (re.compile(r"^\d{2}-\d{2}-\d{4}$"), ("%m-%d-%Y",)),
     (re.compile(r"^\d{2}/\d{2}/\d{2}$"), ("%m/%d/%y",)),
     (re.compile(r"^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}$"), ("%d %b %Y", "%d %B %Y")),
-    (re.compile(r"^[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}$"), ("%b %d %Y", "%B %d %Y")),
+    (re.compile(r"^[A-Za-z]{3,9}\s+\d{1,2}\s+\d{4}$"), ("%b %d %Y", "%B %d %Y")),
+    # Weekday-prefixed, e.g. "Wed Apr 22 2026" (from Scotia's online "Account
+    # Details" export, which renders dates as "Wed, Apr. 22, 2026"). After
+    # normalisation strips the comma and period, we land on the form below.
+    (re.compile(r"^[A-Za-z]{3,9}\s+[A-Za-z]{3,9}\s+\d{1,2}\s+\d{4}$"),
+     ("%a %b %d %Y", "%A %B %d %Y", "%a %B %d %Y", "%A %b %d %Y")),
     (re.compile(r"^[A-Za-z]{3,9}\s+\d{1,2}$"), ("%b %d", "%B %d")),  # short form, no year
 )
 
@@ -52,8 +61,14 @@ def _try_parse_date(raw: str, *, fallback_year: int | None = None) -> date | Non
     For short formats without a year (e.g. "Mar 27"), `fallback_year` is used.
     The fallback is deliberately simple: callers can pre-compute a sensible
     year from surrounding document text (statement period, filename, etc.).
+
+    Normalises the input by stripping commas and periods (so "Wed, Apr. 22,
+    2026" becomes "Wed Apr 22 2026" before regex matching) — this keeps the
+    patterns above readable.
     """
-    s = raw.strip().replace(",", "").rstrip(".")
+    s = raw.strip().replace(",", " ").replace(".", " ")
+    # Collapse the extra whitespace we may have introduced.
+    s = " ".join(s.split())
     if not s:
         return None
     for pattern, fmts in _DATE_FORMATS:
@@ -76,10 +91,13 @@ def _try_parse_date(raw: str, *, fallback_year: int | None = None) -> date | Non
     return None
 
 
-# A signed decimal: optional sign, digits (with optional thousand separators),
-# optional fractional part, optional trailing minus, optional $ and whitespace.
+# A signed decimal: optional leading +/- sign, digits (with optional
+# thousand separators), optional fractional part, optional trailing minus,
+# optional $ and whitespace. `+` is accepted because Scotia's online
+# chequing export uses `+$3,578.05` / `-$3,000.00` to mark deposits vs.
+# withdrawals.
 _AMOUNT_RE = re.compile(
-    r"^\s*\$?\s*-?\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?\s*-?\s*$"
+    r"^\s*[+\-]?\s*\$?\s*[+\-]?\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?\s*-?\s*$"
     r"|^\s*\(\s*\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?\s*\)\s*$"
 )
 
@@ -87,6 +105,7 @@ _AMOUNT_RE = re.compile(
 def _try_parse_amount(raw: str) -> Decimal | None:
     """Parse an amount using the widest sane convention set:
 
+    * Leading plus:           `+37.00` / `+$37.00`  (Scotia online export)
     * Leading minus:          `-37.00`
     * Trailing minus:         `37.00-`
     * Accounting parentheses: `(37.00)`
@@ -101,6 +120,9 @@ def _try_parse_amount(raw: str) -> Decimal | None:
         negative = True
         s = s[1:-1]
     s = s.replace("$", "").replace(" ", "")
+    # Strip leading "+" — purely informational, no effect on sign.
+    if s.startswith("+"):
+        s = s[1:]
     if s.endswith("-"):
         negative = not negative
         s = s[:-1]

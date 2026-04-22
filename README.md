@@ -4,8 +4,8 @@
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| 🍎 **macOS** (Intel or Apple Silicon) | [**VetCPA-0.1.5.dmg**](https://github.com/ANI-ML/VetCPA/releases/download/v0.1.5/VetCPA-0.1.5.dmg) | ~348 MB |
-| 🪟 **Windows 10 / 11** (64-bit) | [**VetCPA-windows-0.1.5.zip**](https://github.com/ANI-ML/VetCPA/releases/download/v0.1.5/VetCPA-windows-0.1.5.zip) | ~315 MB |
+| 🍎 **macOS** (Intel or Apple Silicon) | [**VetCPA-0.1.6.dmg**](https://github.com/ANI-ML/VetCPA/releases/download/v0.1.6/VetCPA-0.1.6.dmg) | ~348 MB |
+| 🪟 **Windows 10 / 11** (64-bit) | [**VetCPA-windows-0.1.6.zip**](https://github.com/ANI-ML/VetCPA/releases/download/v0.1.6/VetCPA-windows-0.1.6.zip) | ~315 MB |
 
 See [all releases](https://github.com/ANI-ML/VetCPA/releases) · [detailed install steps](#install) · [uninstall](#uninstall)
 
@@ -157,7 +157,7 @@ git clone https://github.com/ANI-ML/VetCPA.git
 cd VetCPA/pdf_to_csv
 make install-dev                    # one-time: builds .venv, installs all deps
 ./scripts/build_macos.sh            # produces dist/VetCPA.app  (15-25 min)
-./scripts/make_dmg.sh               # wraps it as dist/VetCPA-0.1.5.dmg
+./scripts/make_dmg.sh               # wraps it as dist/VetCPA-0.1.6.dmg
 ```
 
 - `VetCPA.app` is **~700 MB** without bundled models, **~3 GB** with them.
