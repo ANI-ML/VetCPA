@@ -79,6 +79,10 @@ hiddenimports += [
     "openpyxl",
 ]
 
+# Our own package and its submodules — force them into the bundle so imports
+# resolve from anywhere (e.g. uvicorn's string-form app loader).
+hiddenimports += collect_submodules("pdf_to_csv")
+
 # Our own static assets.
 datas.append(("src/pdf_to_csv/static/index.html", "pdf_to_csv/static"))
 

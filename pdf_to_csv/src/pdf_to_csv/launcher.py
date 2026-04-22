@@ -72,17 +72,26 @@ def _configure_frozen_paths() -> None:
 def _start_uvicorn(host: str, port: int) -> threading.Thread:
     """Spin uvicorn up in a daemon thread so the browser-open logic can
     proceed once /health is up. Daemon means the server dies automatically
-    when the launcher's main thread exits."""
-    # Import inside the function — keeps `--help` and diagnostic paths fast
-    # and isolates the heavy app import away from the launcher's top level.
+    when the launcher's main thread exits.
+
+    NOTE: we pass the `app` object directly, not the "module:attr" string
+    form. Uvicorn's string form defers the import until startup and uses
+    importlib.import_module, which trips up in PyInstaller-frozen bundles
+    (pdf_to_csv.api isn't discoverable via the normal import machinery at
+    that point). Importing the app up-front and handing the object to
+    uvicorn sidesteps that entirely.
+    """
     import uvicorn
+    from pdf_to_csv.api import app
 
     config = uvicorn.Config(
-        "pdf_to_csv.api:app",
+        app,
         host=host,
         port=port,
         log_level="warning",
-        # `workers=1` — single desktop user; no point spawning more.
+        # `workers=1` — single desktop user; no point spawning more. Also
+        # required when passing an app instance (uvicorn refuses workers>1
+        # unless it can re-import the app by string).
         workers=1,
     )
     server = uvicorn.Server(config)
