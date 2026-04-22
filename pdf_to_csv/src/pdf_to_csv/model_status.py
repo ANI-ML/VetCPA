@@ -39,20 +39,41 @@ RECHECK_MIN_INTERVAL_S: float = 1.0  # avoid repeated du -sh-style scans on hot-
 
 
 def _default_cache_dirs() -> list[Path]:
-    """Where Docling's models live.
+    """Where Docling's model weights live on disk.
 
-    Intentionally *only* looks at `~/.cache/docling/` (plus the bundled path
-    when set). Earlier versions also counted `~/.cache/huggingface/`, but
-    that cache is shared with every other HF-using app on the machine —
-    counting it inflated our "percent downloaded" on systems that already
-    had gigabytes of unrelated HF models, which made the progress bar
-    report nonsense numbers.
+    Docling uses `huggingface_hub` to pull its weights, so the files actually
+    land under `~/.cache/huggingface/hub/models--docling-project--*`. Earlier
+    versions counted only `~/.cache/docling/` (which is empty on most real
+    installs) and later versions overcorrected and counted the entire HF
+    cache (which is shared with unrelated apps and inflated the percentage).
+
+    This version threads the needle: we enumerate the HF hub cache and only
+    include directories that match the `models--docling-*` naming convention
+    HF uses, plus Docling's own cache dir if it exists, plus any bundled
+    model path set via `DOCLING_ARTIFACTS_PATH`.
     """
     bundled = os.environ.get("DOCLING_ARTIFACTS_PATH")
     out: list[Path] = []
     if bundled:
         out.append(Path(bundled).expanduser())
-    out.append(Path.home() / ".cache" / "docling")
+
+    home = Path.home()
+    docling_cache = home / ".cache" / "docling"
+    if docling_cache.exists():
+        out.append(docling_cache)
+
+    hf_hub = home / ".cache" / "huggingface" / "hub"
+    if hf_hub.exists():
+        try:
+            for entry in hf_hub.iterdir():
+                # HuggingFace-hub names its per-model dirs
+                # `models--<org>--<repo>`. We only want docling-owned ones so
+                # unrelated HF cached models don't inflate our percent.
+                if entry.is_dir() and entry.name.startswith("models--docling"):
+                    out.append(entry)
+        except (FileNotFoundError, PermissionError):
+            pass
+
     return out
 
 

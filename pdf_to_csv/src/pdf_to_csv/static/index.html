@@ -406,61 +406,94 @@
     .edit-status.dirty { color: var(--accent); font-weight: 600; }
 
     /* ------------------------------------------------------------------ *
-     *  First-launch model-download banner
+     *  First-launch model-download modal (full-screen overlay)
+     *
+     *  Blocks the entire UI until Docling's one-time ~1.5 GB model download
+     *  completes. Clean, obvious, unambiguous: accountant sees "preparing",
+     *  a real progress bar, knows what the app is doing, can't accidentally
+     *  click Extract before it's usable.
      * ------------------------------------------------------------------ */
-    .model-banner {
+    .model-overlay {
+      position: fixed; inset: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(14, 16, 20, 0.55);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      padding: 24px;
+      animation: overlay-fade-in 0.2s ease;
+    }
+    @keyframes overlay-fade-in { from { opacity: 0; } to { opacity: 1; } }
+    [data-theme="dark"] .model-overlay,
+    :root:not([data-theme]) .model-overlay { background: rgba(0, 0, 0, 0.65); }
+
+    .model-card {
+      width: 100%; max-width: 480px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow-md);
+      padding: 28px 30px 26px;
+      text-align: center;
+    }
+    .model-card .mark {
+      width: 56px; height: 56px; margin: 4px auto 16px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 50%;
       background: var(--accent-soft);
-      border: 1px solid var(--accent);
-      border-radius: var(--radius);
-      padding: 18px 22px;
-      margin-bottom: 16px;
-      display: flex; flex-direction: column; gap: 10px;
-      box-shadow: var(--shadow-sm);
     }
-    .model-banner .title {
-      display: flex; align-items: center; gap: 10px;
-      font-weight: 700; font-size: 15px; color: var(--text);
+    .model-card .mark .spinner {
+      width: 28px; height: 28px; border-width: 3px;
+      border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+      border-top-color: var(--accent);
+      margin: 0;
     }
-    .model-banner .title .spinner {
-      border-color: var(--accent); border-top-color: transparent;
-      margin-right: 0;
+    .model-card h3 {
+      margin: 0 0 6px; font-size: 18px; font-weight: 700; letter-spacing: -0.01em;
+      color: var(--text);
     }
-    .model-banner .sub {
-      color: var(--text-soft); font-size: 13px; margin-left: 22px;
+    .model-card p.sub {
+      margin: 0 0 20px; color: var(--text-soft); font-size: 13px; line-height: 1.55;
     }
-    .model-banner .bar-wrap {
+    .model-card .bar-wrap {
       height: 10px; border-radius: 999px;
-      background: color-mix(in srgb, var(--accent) 20%, transparent);
-      overflow: hidden; margin-left: 22px;
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+      overflow: hidden; margin: 0 0 10px;
     }
-    .model-banner .bar {
+    .model-card .bar {
       height: 100%; width: 0%;
       background: var(--accent);
       border-radius: 999px;
       transition: width 0.35s ease;
     }
-    .model-banner .stats {
-      display: flex; gap: 14px; color: var(--muted);
-      font-size: 12px; font-variant-numeric: tabular-nums;
-      margin-left: 22px;
+    .model-card .stats {
+      display: flex; justify-content: space-between; align-items: center;
+      color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums;
     }
-    .model-banner.success {
-      background: var(--good-soft); border-color: var(--good);
-    }
-    .model-banner.success .title { color: var(--good); }
-    .model-banner.success .bar-wrap { background: color-mix(in srgb, var(--good) 20%, transparent); }
-    .model-banner.success .bar { background: var(--good); width: 100% !important; }
 
-    /* Dim the upload card + disable the Extract button when models are still
-       downloading — the app literally can't serve an /extract request yet, so
-       we stop the user from clicking and then staring at a hang. */
-    .waiting-for-models #drop,
-    .waiting-for-models .files,
-    .waiting-for-models #fileListHint {
-      pointer-events: none; opacity: 0.55; filter: grayscale(30%);
-      transition: opacity 0.2s ease;
+    /* "Ready" success state — nice close affordance before the overlay fades. */
+    .model-overlay.success .model-card .mark {
+      background: var(--good-soft);
     }
-    .waiting-for-models #submitBtn { cursor: not-allowed; }
+    .model-overlay.success .model-card .mark .spinner {
+      animation: none; border-color: var(--good); border-top-color: var(--good);
+      transform: rotate(0deg);
+    }
+    .model-overlay.success .model-card .mark::after {
+      content: "✓"; position: absolute; color: var(--good);
+      font-size: 30px; font-weight: 700;
+    }
+    .model-overlay.success .model-card .mark .spinner { display: none; }
+    .model-overlay.success .model-card .bar { background: var(--good); width: 100% !important; }
+    .model-overlay.success .model-card .bar-wrap {
+      background: color-mix(in srgb, var(--good) 18%, transparent);
+    }
+
+    .model-overlay.error .model-card .mark { background: var(--bad-soft); }
+    .model-overlay.error .model-card .mark .spinner { display: none; }
+    .model-overlay.error .model-card .mark::after {
+      content: "!"; color: var(--bad); font-size: 30px; font-weight: 800;
+    }
+    .model-overlay.error .model-card h3 { color: var(--bad); }
 
     /* ------------------------------------------------------------------ *
      *  Footer + ANI.ML logo
@@ -508,15 +541,19 @@
       </div>
     </header>
 
-    <!-- First-launch model-download banner. Hidden unless /models/status says we're mid-download. -->
-    <div class="model-banner hidden" id="modelBanner" role="status" aria-live="polite">
-      <div class="title"><span class="spinner" aria-hidden="true"></span><span id="modelTitle">Downloading OCR models…</span></div>
-      <div class="sub" id="modelSub">One-time setup. After this, VetCPA works fully offline.</div>
-      <div class="bar-wrap"><div class="bar" id="modelBar"></div></div>
-      <div class="stats">
-        <span id="modelStats">0 MB / ~1.5 GB</span>
-        <span id="modelPct">0%</span>
-        <span id="modelElapsed"></span>
+    <!-- First-launch modal. Covers the whole app until Docling's models are ready. -->
+    <div class="model-overlay hidden" id="modelOverlay" role="dialog" aria-modal="true" aria-labelledby="modelTitle">
+      <div class="model-card">
+        <div class="mark" style="position:relative;">
+          <span class="spinner" aria-hidden="true"></span>
+        </div>
+        <h3 id="modelTitle">Preparing VetCPA</h3>
+        <p class="sub" id="modelSub">Setting up the OCR engine. This happens once — every future launch is fully offline.</p>
+        <div class="bar-wrap"><div class="bar" id="modelBar"></div></div>
+        <div class="stats">
+          <span id="modelStats">starting…</span>
+          <span id="modelPct">0%</span>
+        </div>
       </div>
     </div>
 
@@ -821,21 +858,18 @@
         const data = await res.json();
         const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
         stopProgress();
-        // Extract succeeded, so models must be cached. Force the banner to
-        // its ready state and then tear the poller down — guards against
-        // cases where the cache is slightly smaller than our estimate.
+        // Extract succeeded, so models must be cached. Tear down the overlay
+        // poller if any — guards against cases where the cache is slightly
+        // smaller than our estimate.
         modelsReady = true;
-        const final = await fetchModelStatus();
-        paintModelBanner({ ...(final || {}), ready: true }, { downloading: false });
+        stopModelPolling();
+        hideOverlay();
         renderResults(data);
         const nRows = (data.rows || []).length;
         setStatus(`Extracted ${nRows} row${nRows === 1 ? "" : "s"} in ${elapsed}s.`);
       } catch (e) {
         stopProgress();
         stopModelPolling();
-        // If extract failed we can't report a reliable model-ready state,
-        // so hide the banner entirely rather than leave it half-filled.
-        modelBanner.classList.add("hidden");
         setStatus(`Error: ${e.message || e}`, true);
       } finally {
         submitBtn.disabled = state.entries.length === 0;
@@ -1174,36 +1208,24 @@
     }
 
     // ---------------------------------------------------------------------
-    // Model-download banner. Docling's ML weights (~1.5 GB) download from
-    // HuggingFace on first extraction; without this the UI would just sit
-    // there spinning for 3-5 minutes. We poll /models/status, show a
-    // progress bar based on cache-dir growth, and fade out once the
-    // server reports ready=true.
+    // Model-download modal. Docling's ML weights (~1.5 GB) download from
+    // HuggingFace on first launch. The server kicks that off in a warmup
+    // thread at startup; we cover the UI with a full-screen overlay until
+    // /models/status reports ready, so the user literally can't interact
+    // with anything else until models are usable.
     // ---------------------------------------------------------------------
-    const modelBanner = $("modelBanner");
-    const modelBar    = $("modelBar");
-    const modelTitle  = $("modelTitle");
-    const modelSub    = $("modelSub");
-    const modelStats  = $("modelStats");
-    const modelPct    = $("modelPct");
-    const modelElapsed= $("modelElapsed");
+    const modelOverlay = $("modelOverlay");
+    const modelBar     = $("modelBar");
+    const modelTitle   = $("modelTitle");
+    const modelSub     = $("modelSub");
+    const modelStats   = $("modelStats");
+    const modelPct     = $("modelPct");
 
     let modelPoll = null;
-    let modelPollStartedAt = null;
     let modelsReady = false;
 
-    function setWaitingForModels(waiting) {
-      document.body.classList.toggle("waiting-for-models", !!waiting);
-      // Overrides the normal "enable if any files queued" logic — the
-      // submit handler checks modelsReady and refuses to send otherwise.
-      if (waiting) {
-        submitBtn.disabled = true;
-        submitBtn.title = "Waiting for the one-time OCR model download to finish.";
-      } else {
-        submitBtn.disabled = state.entries.length === 0;
-        submitBtn.title = "";
-      }
-    }
+    function showOverlay() { modelOverlay.classList.remove("hidden", "success", "error"); }
+    function hideOverlay() { modelOverlay.classList.add("hidden"); }
 
     function fmtBytes(n) {
       if (!Number.isFinite(n) || n <= 0) return "0 MB";
@@ -1224,59 +1246,57 @@
       } catch { return null; }
     }
 
-    function paintModelBanner(s) {
+    function paintModelOverlay(s) {
       if (!s) return;
       const total = s.estimated_total_bytes || 1;
       const pct = Math.max(0, Math.min(100, s.percent || 0));
       modelBar.style.width = `${pct}%`;
       modelPct.textContent = `${s.ready ? 100 : pct}%`;
-      modelStats.textContent = `${fmtBytes(s.cache_bytes)} / ~${fmtBytes(total)}`;
+      modelStats.textContent = s.ready
+        ? "complete"
+        : `${fmtBytes(s.cache_bytes)} / ~${fmtBytes(total)}`;
 
       if (s.error) {
-        modelBanner.classList.remove("hidden", "success");
+        modelOverlay.classList.remove("hidden", "success");
+        modelOverlay.classList.add("error");
         modelTitle.textContent = "Model download failed";
-        modelSub.textContent = `${s.error} — reload the app or check your network, then try again.`;
-        modelElapsed.textContent = "";
+        modelSub.textContent = `${s.error}. Check your internet connection, then quit and relaunch VetCPA.`;
         stopModelPolling();
-        // Still gated; user can't extract with broken models.
         return;
       }
 
       if (s.ready) {
         modelsReady = true;
-        setWaitingForModels(false);
-        modelBanner.classList.remove("hidden");
-        modelBanner.classList.add("success");
-        modelTitle.textContent = "Models ready — VetCPA now works fully offline.";
+        modelOverlay.classList.remove("hidden");
+        modelOverlay.classList.add("success");
+        modelTitle.textContent = "Ready";
         modelSub.textContent = s.bundled
-          ? "This build ships with models bundled — no download was needed."
-          : "One-time setup complete. Drag a statement onto the drop zone to begin.";
-        modelElapsed.textContent = "";
-        // Fade the success banner out after a short breather.
-        setTimeout(() => modelBanner.classList.add("hidden"), 2500);
+          ? "This build ships with models bundled — VetCPA is ready to use."
+          : "VetCPA is ready to use. All future launches are fully offline.";
         stopModelPolling();
+        // Give the user a beat to register the success state, then drop the
+        // overlay and hand them the app.
+        setTimeout(hideOverlay, 1200);
         return;
       }
 
-      modelBanner.classList.remove("hidden", "success");
-      modelTitle.textContent = s.downloading
-        ? "Downloading OCR models…"
-        : "Preparing OCR models…";
-      modelSub.textContent = s.downloading
-        ? "First launch only (~1.5 GB from HuggingFace). We'll unlock the upload area as soon as this finishes — all future launches are offline."
-        : "Starting up… the one-time model download begins in a moment.";
-      if (modelPollStartedAt != null) {
-        const elapsed = (performance.now() - modelPollStartedAt) / 1000;
-        modelElapsed.textContent = `elapsed ${fmtSecs(elapsed)}`;
+      // Still downloading / preparing
+      showOverlay();
+      if (s.downloading) {
+        modelTitle.textContent = "Downloading OCR models";
+        modelSub.textContent =
+          "One-time setup — roughly 1.5 GB from HuggingFace. After this, VetCPA runs fully offline.";
+      } else {
+        modelTitle.textContent = "Preparing VetCPA";
+        modelSub.textContent = "Starting up…";
       }
     }
 
     function startModelPolling() {
       if (modelPoll) return;
-      if (modelPollStartedAt == null) modelPollStartedAt = performance.now();
       const tick = async () => {
         const s = await fetchModelStatus();
-        paintModelBanner(s);
+        paintModelOverlay(s);
       };
       tick();                       // paint once immediately
       modelPoll = setInterval(tick, 1500);
@@ -1286,15 +1306,19 @@
     }
 
     // Page-load probe. The backend starts downloading Docling's models in a
-    // background thread at server boot, so most first-time users arrive here
-    // while the download is already in flight. Gate the upload area + Extract
-    // button until /models/status reports ready, and drive the banner with a
-    // live poll the whole time.
+    // background thread at server boot. If they're already cached, we skip
+    // the overlay entirely and hand the user straight into the app. If
+    // anything is still downloading, the overlay covers everything until
+    // the server reports ready.
     (async function initModelStatus() {
       const s = await fetchModelStatus();
-      if (s && s.ready) { modelsReady = true; return; }
-      setWaitingForModels(true);
-      paintModelBanner(s);
+      if (s && s.ready) {
+        modelsReady = true;
+        hideOverlay();
+        return;
+      }
+      showOverlay();
+      paintModelOverlay(s);
       startModelPolling();
     })();
 

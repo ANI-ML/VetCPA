@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import http.client
 import logging
+import multiprocessing
 import os
 import socket
 import sys
@@ -21,6 +22,17 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+
+
+# CRITICAL: called before anything else. In a PyInstaller-frozen macOS .app
+# (or Windows .exe), Python's `multiprocessing` re-executes this script from
+# the top for every worker it spawns. Docling uses multiprocessing pools for
+# OCR/layout analysis, so without `freeze_support()` every worker would run
+# main() again — opening a new browser tab each time, starting its own
+# uvicorn that port-conflicts with the first, and producing the "20 tabs,
+# app keeps reloading" behavior we saw in v0.1.3. This call makes the
+# secondary-process branch exit immediately and hand off to the mp worker.
+multiprocessing.freeze_support()
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -136,4 +148,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Second freeze_support() call — canonical position per Python docs.
+    # Belt-and-suspenders with the module-top call.
+    multiprocessing.freeze_support()
     raise SystemExit(main())
