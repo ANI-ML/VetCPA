@@ -18,6 +18,12 @@ Uses [Docling](https://github.com/DS4SD/docling) to extract tables from PDFs, th
 
 Rows are sorted by `(StatementTitle, Date)` so statements appear as grouped blocks in the output. `AccountType` is auto-detected from the PDF text when the user doesn't pick one from the dropdown.
 
+### Accepted inputs
+
+- **PDF** — the main input; digital-born PDFs run without OCR, scanned PDFs use `--ocr`.
+- **Images** — JPG / JPEG / PNG / TIFF / BMP. Docling routes these through its image pipeline with OCR on by default.
+- **HEIC / HEIF** — iPhone photos work natively; we convert them to JPEG on the way in (via `pillow-heif`). The original `.heic` filename is preserved in the `source_file` audit column.
+
 Three ways to use it — **CLI** for batch jobs, **drag-and-drop web UI** at `/`, and **JSON/CSV/Excel HTTP API** at `/extract`.
 
 ## Status

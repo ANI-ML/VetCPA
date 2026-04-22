@@ -159,10 +159,15 @@
 
     <div class="card">
       <label class="drop" id="drop">
-        <input type="file" id="fileInput" multiple accept="application/pdf,.pdf" />
+        <input
+          type="file"
+          id="fileInput"
+          multiple
+          accept="application/pdf,.pdf,.jpg,.jpeg,image/jpeg,.png,image/png,.tif,.tiff,image/tiff,.bmp,image/bmp,.heic,.heif,image/heic,image/heif"
+        />
         <div>
-          <div><strong>Drop PDFs here</strong> or click to browse</div>
-          <div class="hint">Statements, receipts — one or many at once. Accepted: .pdf</div>
+          <div><strong>Drop PDFs or photos here</strong> or click to browse</div>
+          <div class="hint">Statements, receipts, phone photos, or scans. Accepted: PDF, JPG, PNG, TIFF, BMP, HEIC.</div>
         </div>
       </label>
       <ul class="files" id="fileList"></ul>
@@ -218,9 +223,20 @@
       { value: "other",      label: "Other" },
     ];
 
+    // Keep in sync with server-side ingest.SUPPORTED_INPUT_EXTS.
+    const ACCEPTED_EXTS = new Set([
+      ".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".heic", ".heif",
+    ]);
+
+    function extOf(name) {
+      const i = name.lastIndexOf(".");
+      return i >= 0 ? name.slice(i).toLowerCase() : "";
+    }
+
     function defaultTitleFor(file) {
-      // Strip common extensions; leave spaces/dashes alone for readability.
-      return file.name.replace(/\.(pdf|PDF)$/, "");
+      // Strip the known extension; leave spaces/dashes alone for readability.
+      const ext = extOf(file.name);
+      return ext ? file.name.slice(0, -ext.length) : file.name;
     }
 
     const $ = (id) => document.getElementById(id);
@@ -233,8 +249,9 @@
 
     // --- File selection + drag and drop -----------------------------------
     function addFiles(list) {
+      const rejected = [];
       for (const f of list) {
-        if (!f.name.toLowerCase().endsWith(".pdf")) continue;
+        if (!ACCEPTED_EXTS.has(extOf(f.name))) { rejected.push(f.name); continue; }
         // Skip duplicates (by name + size).
         if (state.entries.some((e) => e.file.name === f.name && e.file.size === f.size)) continue;
         state.entries.push({
@@ -242,6 +259,12 @@
           title: defaultTitleFor(f),
           accountType: "", // auto-detect
         });
+      }
+      if (rejected.length) {
+        setStatus(
+          `Skipped ${rejected.length} file(s) — only PDF / JPG / PNG / TIFF / BMP / HEIC are accepted.`,
+          true,
+        );
       }
       renderFiles();
     }

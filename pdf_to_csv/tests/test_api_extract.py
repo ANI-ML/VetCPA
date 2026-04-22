@@ -59,17 +59,23 @@ def stub_pipeline(monkeypatch: pytest.MonkeyPatch):
             )
             title = (j.title if hasattr(j, "title") and j.title else path.stem)
             at = j.account_type if hasattr(j, "account_type") and j.account_type else AccountType.OTHER
+            # Display name mimics the real pipeline: original filename wins over
+            # the possibly-converted Docling path (e.g. HEIC → JPEG).
+            display_name = (
+                j.original_filename if hasattr(j, "original_filename") and j.original_filename
+                else path.name
+            )
             # Clone per file — tests reuse the same TransactionRow across entries,
             # and stamping metadata in-place would otherwise overwrite siblings.
             stamped = [
                 t.model_copy(update={
-                    "StatementTitle": title, "AccountType": at, "source_file": path.name,
+                    "StatementTitle": title, "AccountType": at, "source_file": display_name,
                 })
                 for t in txns
             ]
             results.append(pipeline_module.PdfExtractionResult(
                 pdf_path=path, parser_name=parser, transactions=stamped,
-                title=title, account_type=at, error=err,
+                title=title, account_type=at, display_name=display_name, error=err,
             ))
             all_txns.extend(stamped)
         df = pipeline_module.transactions_to_dataframe(all_txns, include_source=include_source)
@@ -284,14 +290,63 @@ def test_extract_keeps_same_row_across_distinct_statements(client: TestClient, s
 # /extract — error paths
 # ---------------------------------------------------------------------------
 
-def test_extract_rejects_non_pdf(client: TestClient, stub_pipeline) -> None:
+def test_extract_accepts_heic_and_converts_to_jpeg(
+    client: TestClient, stub_pipeline, tmp_path,
+) -> None:
+    # Generate a real HEIF byte stream so the conversion path actually runs.
+    pillow_heif = pytest.importorskip("pillow_heif")
+    from PIL import Image
+
+    pillow_heif.register_heif_opener()
+    heic_path = tmp_path / "fixture.heic"
+    Image.new("RGB", (32, 32), color=(100, 200, 150)).save(heic_path, format="HEIF")
+    heic_bytes = heic_path.read_bytes()
+
+    # The pipeline is stubbed; what matters is that ingress accepts HEIC,
+    # converts it, and hands the resulting path to the (faked) pipeline. The
+    # fake maps by filename.stem-matching, and the converted file is named
+    # "phone.jpg" (stem preserved). We key on that.
+    stub_pipeline({
+        "phone.jpg": ("generic_table", [_txn("2025-03-27", "-4.25", "RECEIPT")], None),
+    })
+
+    r = client.post(
+        "/extract",
+        files=[("files", ("phone.heic", heic_bytes, "image/heic"))],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # source_file should show the user's original HEIC name, not the JPEG.
+    assert body["files"][0]["filename"] == "phone.heic"
+    assert body["summary"]["rows_after_dedup"] == 1
+
+
+def test_extract_accepts_jpg_and_png(client: TestClient, stub_pipeline) -> None:
+    stub_pipeline({
+        "photo.jpg": ("generic_table", [_txn("2025-03-27", "-4.25", "STARBUCKS")], None),
+        "scan.png": ("generic_table", [_txn("2025-03-28", "-60.00", "SHELL")], None),
+    })
+    r = client.post(
+        "/extract",
+        files=[
+            ("files", ("photo.jpg", b"\xff\xd8\xff\xd9", "image/jpeg")),
+            ("files", ("scan.png", b"\x89PNG\r\n\x1a\n", "image/png")),
+        ],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["summary"]["rows_after_dedup"] == 2
+
+
+def test_extract_rejects_unsupported_type(client: TestClient, stub_pipeline) -> None:
     stub_pipeline({})
     r = client.post(
         "/extract",
-        files=[("files", ("a.png", b"not a pdf", "image/png"))],
+        files=[("files", ("notes.docx", b"whatever", "application/vnd.ms-word"))],
     )
     assert r.status_code == 400
-    assert "Only .pdf" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert "Unsupported file type" in detail
+    assert "Accepted" in detail
 
 
 def test_extract_rejects_empty_file(client: TestClient, stub_pipeline) -> None:

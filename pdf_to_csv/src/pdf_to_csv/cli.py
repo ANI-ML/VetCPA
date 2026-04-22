@@ -2,8 +2,11 @@
 
 Two subcommands:
 
-    pdf-to-csv inspect <pdf>                        Print Docling-extracted tables
-    pdf-to-csv extract <pdf>... --out out.csv       Run the full pipeline -> CSV
+    pdf-to-csv inspect <file>                         Print Docling-extracted tables
+    pdf-to-csv extract <file>... --out out.csv        Run the full pipeline -> CSV
+
+Both accept PDFs and images (JPG/JPEG/PNG/TIF/TIFF/BMP/HEIC/HEIF). HEIC/HEIF
+files are transparently converted to JPEG before Docling sees them.
 
 `extract` also accepts `--excel <path>` for an Excel workbook, `--ocr` for
 scanned statements, and `--include-source` to add `source_bank`/`source_file`
@@ -11,6 +14,7 @@ columns for auditability.
 """
 from __future__ import annotations
 
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -40,19 +44,40 @@ def _default(ctx: typer.Context) -> None:
 
 @app.command()
 def inspect(
-    pdf: Path = typer.Argument(..., exists=True, readable=True, help="PDF file to inspect."),
+    pdf: Path = typer.Argument(
+        ..., exists=True, readable=True,
+        help="File to inspect (PDF or image: JPG / PNG / HEIC / ...).",
+    ),
     ocr: bool = typer.Option(
-        False, "--ocr/--no-ocr", help="Enable Docling OCR (needed for scanned statements)."
+        False, "--ocr/--no-ocr",
+        help="Enable Docling OCR for PDFs (image inputs always use OCR).",
     ),
     rows: int = typer.Option(
         3, "--rows", "-n", min=0, help="Number of body rows to preview per table."
     ),
 ) -> None:
-    """Print every table Docling extracts from a PDF, with headers and a preview."""
+    """Print every table Docling extracts from a statement, with headers and a preview."""
     from pdf_to_csv.docling_client import parse_pdf_to_tables
+    from pdf_to_csv.ingest import (
+        HeicConversionError, accepted_types_label, is_supported, normalize_for_docling,
+    )
 
-    typer.echo(f"Parsing: {pdf}")
-    tables = parse_pdf_to_tables(pdf, do_ocr=ocr)
+    if not is_supported(pdf):
+        typer.secho(
+            f"Unsupported file type: {pdf} (accepted: {accepted_types_label()})",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+
+    # HEIC conversion in a temp dir if needed; no-op for everything else.
+    with tempfile.TemporaryDirectory(prefix="pdf_to_csv_inspect_") as td:
+        try:
+            docling_path = normalize_for_docling(pdf, work_dir=Path(td))
+        except HeicConversionError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED)
+            raise typer.Exit(code=2) from exc
+        typer.echo(f"Parsing: {pdf}")
+        tables = parse_pdf_to_tables(docling_path, do_ocr=ocr)
 
     if not tables:
         typer.echo("No tables found.")
@@ -78,20 +103,22 @@ def inspect(
 
 @app.command()
 def extract(
-    pdfs: list[Path] = typer.Argument(
-        ..., exists=True, readable=True, help="One or more PDF statements to process."
+    files: list[Path] = typer.Argument(
+        ..., exists=True, readable=True,
+        help="One or more statement files (PDF / JPG / PNG / HEIC / ...) to process.",
     ),
     out: Path = typer.Option(..., "--out", "-o", help="Output CSV path."),
     excel: Path = typer.Option(
         None, "--excel", help="Optional Excel (.xlsx) output path.",
     ),
     ocr: bool = typer.Option(
-        False, "--ocr/--no-ocr", help="Enable Docling OCR (for scanned statements)."
+        False, "--ocr/--no-ocr",
+        help="Enable Docling OCR for PDFs (image inputs always use OCR).",
     ),
     dedupe: bool = typer.Option(
         True,
         "--dedupe/--no-dedupe",
-        help="Drop rows with identical (Date, Amount, Description) across PDFs.",
+        help="Drop rows with identical (Title, Date, Amount, Description) across files.",
     ),
     include_source: bool = typer.Option(
         False,
@@ -99,27 +126,53 @@ def extract(
         help="Add source_bank and source_file columns to the output.",
     ),
 ) -> None:
-    """Extract transactions from one or more PDFs into a unified CSV."""
+    """Extract transactions from one or more statements into a unified CSV."""
     # Lazy imports — keep --help fast, keep tests cheap.
     from pdf_to_csv.docling_client import build_converter
-    from pdf_to_csv.pipeline import extract_transactions_from_many
+    from pdf_to_csv.ingest import (
+        HeicConversionError, accepted_types_label, is_supported, normalize_for_docling,
+    )
+    from pdf_to_csv.pipeline import PdfJob, extract_transactions_from_many
 
-    typer.echo(f"Processing {len(pdfs)} PDF(s)...")
+    # Validate extensions up-front — fail fast before building Docling.
+    bad = [p for p in files if not is_supported(p)]
+    if bad:
+        for p in bad:
+            typer.secho(
+                f"Unsupported file type: {p} (accepted: {accepted_types_label()})",
+                fg=typer.colors.RED,
+            )
+        raise typer.Exit(code=2)
 
-    # Build the Docling converter once and reuse across every PDF — model load
+    typer.echo(f"Processing {len(files)} file(s)...")
+
+    # Build the Docling converter once and reuse across every file — model load
     # is the expensive bit.
     converter = build_converter(do_ocr=ocr)
 
-    df, results = extract_transactions_from_many(
-        pdfs,
-        dedupe=dedupe,
-        include_source=include_source,
-        converter=converter,
-    )
+    # Temp dir for HEIC → JPEG conversions. `normalize_for_docling` is a no-op
+    # for non-HEIC inputs so this dir stays empty in the common case.
+    with tempfile.TemporaryDirectory(prefix="pdf_to_csv_cli_") as td:
+        work_dir = Path(td)
+        jobs: list[PdfJob] = []
+        for f in files:
+            try:
+                docling_path = normalize_for_docling(f, work_dir=work_dir)
+            except HeicConversionError as exc:
+                typer.secho(f"  {f.name}: {exc}", fg=typer.colors.RED)
+                raise typer.Exit(code=2) from exc
+            jobs.append(PdfJob(path=docling_path, original_filename=f.name))
 
-    # Per-PDF progress with the parser that claimed each one.
+        df, results = extract_transactions_from_many(
+            jobs,
+            dedupe=dedupe,
+            include_source=include_source,
+            converter=converter,
+        )
+
+    # Per-file progress with the parser that claimed each one.
     for r in results:
-        rel = r.pdf_path.name
+        rel = r.display_name or r.pdf_path.name
         if r.error:
             typer.secho(f"  {rel}: FAILED — {r.error}", fg=typer.colors.RED)
         else:

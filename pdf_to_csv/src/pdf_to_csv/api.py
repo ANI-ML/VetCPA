@@ -50,6 +50,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from pdf_to_csv.account_type import AccountType
 from pdf_to_csv.docling_client import build_converter
+from pdf_to_csv.ingest import (
+    HeicConversionError,
+    accepted_types_label,
+    is_supported,
+    normalize_for_docling,
+)
 from pdf_to_csv.pipeline import PdfJob, extract_transactions_from_many
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -165,11 +171,13 @@ async def extract(
         raise HTTPException(status_code=400, detail="No files submitted.")
 
     for f in files:
-        name = (f.filename or "").lower()
-        if not name.endswith(".pdf"):
+        if not is_supported(f.filename or ""):
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file type: {f.filename!r}. Only .pdf is accepted.",
+                detail=(
+                    f"Unsupported file type: {f.filename!r}. "
+                    f"Accepted: {accepted_types_label()}."
+                ),
             )
 
     # Parallel-array validation — if provided, lengths must match `files`.
@@ -190,9 +198,11 @@ async def extract(
     # Spool uploads to a temp dir so Docling (which takes a Path) can read them.
     # The TemporaryDirectory cleans itself up when the request ends.
     with tempfile.TemporaryDirectory(prefix="pdf_to_csv_") as td:
+        work_dir = Path(td)
         jobs: list[PdfJob] = []
         for i, f in enumerate(files):
-            dest = Path(td) / Path(f.filename or "upload.pdf").name
+            original_name = Path(f.filename or "upload").name
+            dest = work_dir / original_name
             content = await f.read()
             if len(content) > MAX_UPLOAD_BYTES:
                 raise HTTPException(
@@ -203,14 +213,22 @@ async def extract(
                 raise HTTPException(status_code=400, detail=f"{f.filename} is empty.")
             dest.write_bytes(content)
 
+            # HEIC / HEIF → JPEG in the same temp dir. For every other supported
+            # format, `normalize_for_docling` is a no-op.
+            try:
+                docling_path = normalize_for_docling(dest, work_dir=work_dir)
+            except HeicConversionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
             # An empty-string title entry counts as "use the default."
             raw_title = titles[i] if titles is not None else None
             title: str | None = raw_title.strip() if raw_title and raw_title.strip() else None
             raw_at = account_types[i] if account_types is not None else None
             jobs.append(PdfJob(
-                path=dest,
+                path=docling_path,
                 title=title,
                 account_type=_resolve_account_type(raw_at),
+                original_filename=original_name,
             ))
 
         converter = _get_converter(ocr=ocr)
@@ -228,7 +246,7 @@ async def extract(
     files_summary: list[dict[str, Any]] = []
     for r in results:
         files_summary.append({
-            "filename": r.pdf_path.name,
+            "filename": r.display_name or r.pdf_path.name,
             "title": r.title,
             "account_type": r.account_type.value if hasattr(r.account_type, "value") else str(r.account_type),
             "parser": r.parser_name,

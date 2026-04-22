@@ -6,3 +6,5 @@ uvicorn[standard]>=0.29
 python-multipart>=0.0.9
 typer>=0.12
 pydantic>=2.6
+pillow>=10.0
+pillow-heif>=0.14

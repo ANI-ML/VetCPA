@@ -49,13 +49,31 @@ class NoParserMatchedError(RuntimeError):
 
 @dataclass
 class PdfJob:
-    """One PDF to process, plus the metadata the accountant will see in the
-    output CSV. Title defaults to the filename stem; account_type is
-    auto-detected when None."""
+    """One input document to process, plus the metadata the accountant will see
+    in the output CSV.
+
+    * `path` points at whatever Docling will actually read — after any
+      preprocessing (e.g. a HEIC file gets converted to JPEG and `path` points
+      at the JPEG).
+    * `original_filename` carries the user-facing name so logs, error messages,
+      and the `source_file` column show "photo.heic" even though Docling saw
+      "photo.jpg". Defaults to `path.name` when unset.
+    * `title` defaults to the original filename's stem when unset.
+    * `account_type` is auto-detected from the document text when unset.
+    """
 
     path: Path
     title: str | None = None
     account_type: AccountType | None = None
+    original_filename: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        return self.original_filename or self.path.name
+
+    @property
+    def default_title(self) -> str:
+        return Path(self.display_name).stem
 
     @classmethod
     def from_any(cls, value: "PdfJob | Path | str") -> "PdfJob":
@@ -78,14 +96,21 @@ def detect_bank_parser(parsed: ParsedPDF) -> BaseParser:
 
 @dataclass
 class PdfExtractionResult:
-    """Result of extracting a single PDF. `error` is populated if extraction
-    failed; callers can aggregate successes and failures into a summary."""
+    """Result of extracting a single document. `error` is populated if extraction
+    failed; callers can aggregate successes and failures into a summary.
+
+    `pdf_path` is the path Docling actually read — which may be a JPEG we
+    generated from a HEIC. `display_name` is the user-facing filename; API and
+    CLI summaries should prefer this over `pdf_path.name` so HEIC uploads
+    display as the original .heic.
+    """
 
     pdf_path: Path
     parser_name: str | None
     transactions: list[TransactionRow]
     title: str = ""
     account_type: AccountType = AccountType.OTHER
+    display_name: str = ""
     error: str | None = None
 
 
@@ -99,13 +124,15 @@ def extract_transactions_from_pdf(
     in `result.error` so batch runs don't die on a single bad file."""
     job = PdfJob.from_any(job)
     pdf_path = job.path
-    default_title = pdf_path.stem
+    display_name = job.display_name
+    default_title = job.default_title
+    _base_result_kw = {"pdf_path": pdf_path, "display_name": display_name}
 
     try:
         parsed = parse_pdf(pdf_path, do_ocr=do_ocr, converter=converter)
     except Exception as exc:  # noqa: BLE001 - we want to report every failure mode
         return PdfExtractionResult(
-            pdf_path=pdf_path,
+            **_base_result_kw,
             parser_name=None,
             transactions=[],
             title=job.title or default_title,
@@ -123,7 +150,7 @@ def extract_transactions_from_pdf(
         parser = detect_bank_parser(parsed)
     except NoParserMatchedError as exc:
         return PdfExtractionResult(
-            pdf_path=pdf_path, parser_name=None, transactions=[],
+            **_base_result_kw, parser_name=None, transactions=[],
             title=title, account_type=account_type, error=str(exc),
         )
 
@@ -131,18 +158,19 @@ def extract_transactions_from_pdf(
         txns = parser.extract_transactions(parsed)
     except Exception as exc:  # noqa: BLE001
         return PdfExtractionResult(
-            pdf_path=pdf_path, parser_name=parser.name, transactions=[],
+            **_base_result_kw, parser_name=parser.name, transactions=[],
             title=title, account_type=account_type, error=f"{parser.name}: {exc}",
         )
 
-    # Stamp every row with the resolved statement metadata + source file name.
+    # Stamp every row with the resolved statement metadata. `source_file` uses
+    # the display name so HEIC uploads don't show up as the converted JPEG.
     for t in txns:
         t.StatementTitle = title
         t.AccountType = account_type
-        t.source_file = pdf_path.name
+        t.source_file = display_name
 
     return PdfExtractionResult(
-        pdf_path=pdf_path, parser_name=parser.name, transactions=txns,
+        **_base_result_kw, parser_name=parser.name, transactions=txns,
         title=title, account_type=account_type,
     )
 
