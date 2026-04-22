@@ -1,12 +1,14 @@
 """Command-line interface.
 
-Two subcommands:
+Subcommands:
 
     pdf-to-csv inspect <file>                         Print Docling-extracted tables
     pdf-to-csv extract <file>... --out out.csv        Run the full pipeline -> CSV
+    pdf-to-csv feedback <list|export|count>           Inspect the feedback log
 
-Both accept PDFs and images (JPG/JPEG/PNG/TIF/TIFF/BMP/HEIC/HEIF). HEIC/HEIF
-files are transparently converted to JPEG before Docling sees them.
+Both `inspect` and `extract` accept PDFs and images (JPG/JPEG/PNG/TIF/TIFF/
+BMP/HEIC/HEIF). HEIC/HEIF files are transparently converted to JPEG before
+Docling sees them.
 
 `extract` also accepts `--excel <path>` for an Excel workbook, `--ocr` for
 scanned statements, and `--include-source` to add `source_bank`/`source_file`
@@ -33,8 +35,69 @@ def _default(ctx: typer.Context) -> None:
             "pdf-to-csv: run with a subcommand.\n"
             "  inspect <pdf>                  Print every table Docling extracts.\n"
             "  extract <pdf>... --out <csv>   Run pipeline, write CSV (+optional Excel).\n"
+            "  feedback list | export | count Inspect the feedback log.\n"
             "\nRun `pdf-to-csv <cmd> --help` for details."
         )
+
+
+feedback_app = typer.Typer(
+    add_completion=False,
+    help="Inspect the user-correction feedback log (SQLite-backed).",
+)
+app.add_typer(feedback_app, name="feedback")
+
+
+@feedback_app.command("list")
+def feedback_list(
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=1000,
+                              help="Max records to show (most recent first)."),
+) -> None:
+    """Print the most recent feedback records, one per line."""
+    from pdf_to_csv.feedback_store import FeedbackStore, default_db_path
+
+    store = FeedbackStore(default_db_path())
+    records = store.list_all(limit=limit)
+    if not records:
+        typer.echo("No feedback recorded yet.")
+        return
+    typer.echo(f"{len(records)} record(s), newest first:\n")
+    for r in records:
+        when = r.created_at.isoformat(timespec="seconds")
+        title = r.statement_title or "—"
+        src = r.source_file or "—"
+        typer.echo(f"  [{r.id}] {when} {r.action:<6} {title} / {src}")
+
+
+@feedback_app.command("count")
+def feedback_count_cmd() -> None:
+    """Print the total number of feedback records."""
+    from pdf_to_csv.feedback_store import FeedbackStore, default_db_path
+    typer.echo(str(FeedbackStore(default_db_path()).count()))
+
+
+@feedback_app.command("export")
+def feedback_export(
+    out: Path = typer.Option(..., "--out", "-o", help="Destination JSON file."),
+    limit: int = typer.Option(0, "--limit", "-n", min=0,
+                              help="Max records to export (0 = all)."),
+) -> None:
+    """Dump feedback records as a JSON array to `out`.
+
+    This is the pragmatic way to get the full dataset to a developer for
+    analysis — they can open it in pandas / jq / whatever.
+    """
+    import json
+    from pdf_to_csv.feedback_store import FeedbackStore, default_db_path
+
+    store = FeedbackStore(default_db_path())
+    records = store.list_all(limit=limit or None)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
+        json.dump(
+            [r.model_dump(mode="json") for r in records],
+            f, ensure_ascii=False, indent=2,
+        )
+    typer.echo(f"Wrote {len(records)} record(s) to {out}")
 
 
 # ---------------------------------------------------------------------------

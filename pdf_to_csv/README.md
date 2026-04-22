@@ -188,6 +188,28 @@ PARSER_REGISTRY = [
 
 The `GenericTableParser` stays in place — it's insurance against the long tail of banks that don't yet have a named parser.
 
+## Correcting extractions — the feedback loop
+
+The pipeline is heuristic. The generic fallback parser will get some rows wrong (OCR mis-alignment on photos, sign conventions on unknown banks, etc.), and even bank-specific parsers have blind spots until they're polished against real statements.
+
+The web UI at `/` lets the accountant fix rows in place:
+
+- **Edit** any cell (inputs for most fields, dropdown for `AccountType`). Modified rows are tinted yellow.
+- **Add row** for transactions the pipeline missed. Added rows are tinted green.
+- **Delete** rows with the `✕` on the right.
+- **Download CSV / Excel** uses the corrected state via the `/export` endpoint — so the file the accountant hands on reflects their edits, not the raw pipeline output.
+- **Save corrections** POSTs the diff to `/feedback`, which persists to a SQLite store (`./data/feedback.db` by default; overridable via `PDF_TO_CSV_FEEDBACK_DB`). Each correction records the action (`edit`/`add`/`delete`), the original and corrected row content, and the source file / bank / title / account-type for grouping later.
+
+Developers can inspect the collected feedback:
+
+```bash
+pdf-to-csv feedback count                    # total records
+pdf-to-csv feedback list --limit 20          # recent records
+pdf-to-csv feedback export --out out.json    # dump all records as JSON
+```
+
+Over time, patterns in the feedback log (e.g. "the Scotia chequing parser always flips insurance sign") inform where to write the next bank-specific parser or tighten the generic heuristics.
+
 ## Known limitations
 
 Things to watch for when reviewing output, especially on the first run against a new bank:

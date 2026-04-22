@@ -133,18 +133,34 @@
     table.perfile .ok { color: var(--good); }
     table.perfile .err { color: var(--bad); }
 
-    /* Results table */
-    .rows-wrap { max-height: 480px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+    /* Results table — editable cells */
+    .rows-wrap { max-height: 520px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
     table.rows { width: 100%; border-collapse: collapse; font-size: 13px; }
     table.rows th, table.rows td {
       border-bottom: 1px solid var(--border);
-      padding: 8px 10px; text-align: left; vertical-align: top;
-      white-space: nowrap;
+      padding: 4px 6px; text-align: left; vertical-align: top;
     }
-    table.rows td.desc { white-space: normal; max-width: 380px; }
-    table.rows td.amount { text-align: right; font-variant-numeric: tabular-nums; }
-    table.rows td.amount.neg { color: var(--bad); }
-    table.rows thead th { position: sticky; top: 0; background: #f9fafb; color: var(--muted); }
+    table.rows thead th { position: sticky; top: 0; background: #f9fafb; color: var(--muted); white-space: nowrap; }
+    table.rows input[type="text"], table.rows select {
+      width: 100%; border: 1px solid transparent; background: transparent;
+      font: inherit; color: inherit; padding: 3px 5px; border-radius: 3px;
+    }
+    table.rows input[type="text"]:hover, table.rows select:hover { border-color: var(--border); }
+    table.rows input[type="text"]:focus, table.rows select:focus {
+      outline: none; border-color: var(--accent); background: #fff;
+    }
+    table.rows tr.edited td { background: #fffbeb; }   /* yellow tint */
+    table.rows tr.added td { background: #ecfdf5; }    /* green tint */
+    table.rows td.amount-col input { text-align: right; font-variant-numeric: tabular-nums; }
+    table.rows td.amount-neg input { color: var(--bad); }
+    table.rows td.row-actions { text-align: right; width: 36px; }
+    table.rows td.row-actions button {
+      border: none; background: transparent; color: var(--muted);
+      cursor: pointer; font-size: 14px; padding: 2px 4px;
+    }
+    table.rows td.row-actions button:hover { color: var(--bad); }
+    .edit-status { color: var(--muted); font-size: 12px; margin-left: 8px; }
+    .edit-status.dirty { color: var(--accent); font-weight: 600; }
 
     .hidden { display: none !important; }
     .hint { color: var(--muted); font-size: 12px; }
@@ -195,9 +211,17 @@
       <div id="byParser" class="hint" style="margin-bottom:12px;"></div>
       <table class="perfile" id="perFile"></table>
 
-      <div class="actions" style="margin:16px 0 12px;">
+      <p class="hint" style="margin:16px 0 0;">
+        <strong>Edit any cell</strong> to correct the extraction. Changes are tracked automatically —
+        click <em>Save corrections</em> to persist the diff for future pipeline improvements, and
+        <em>Download CSV / Excel</em> to get the corrected output.
+      </p>
+      <div class="actions" style="margin:10px 0 12px;">
+        <button class="secondary" id="addRowBtn">+ Add row</button>
+        <button class="primary" id="saveFeedbackBtn" disabled>Save corrections</button>
         <button class="secondary" id="downloadCsvBtn">Download CSV</button>
         <button class="secondary" id="downloadExcelBtn">Download Excel</button>
+        <span class="edit-status" id="editStatus"></span>
       </div>
 
       <div class="rows-wrap">
@@ -365,15 +389,23 @@
       }
     });
 
-    // --- Downloads --------------------------------------------------------
-    $("downloadCsvBtn").addEventListener("click", () => downloadAs("csv"));
-    $("downloadExcelBtn").addEventListener("click", () => downloadAs("excel"));
+    // --- Downloads — from the current (edited) row state ------------------
+    $("downloadCsvBtn").addEventListener("click", () => downloadCurrentAs("csv"));
+    $("downloadExcelBtn").addEventListener("click", () => downloadCurrentAs("excel"));
 
-    async function downloadAs(format) {
-      if (state.entries.length === 0) return;
+    async function downloadCurrentAs(format) {
+      const rows = currentRowsForExport();
+      if (rows.length === 0) {
+        setStatus("Nothing to download — extract a statement first.", true);
+        return;
+      }
       setStatus(`Building ${format.toUpperCase()}...`);
       try {
-        const res = await fetch(buildUrl(format), { method: "POST", body: buildFormData() });
+        const res = await fetch("/export", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows, format, filename: "transactions" }),
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readError(res)}`);
         const blob = await res.blob();
         const filename = format === "excel" ? "transactions.xlsx" : "transactions.csv";
@@ -402,7 +434,17 @@
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
     }
 
-    // --- Rendering --------------------------------------------------------
+    // --- Editable results table -----------------------------------------
+    // rowState[i] = { original, current, added, deleted }
+    //   - original: the row as the pipeline produced it (frozen reference)
+    //   - current:  the row as the user has (possibly) edited it
+    //   - added:    true if the user added it locally (no `original`)
+    //   - deleted:  true if the user deleted a server row; we keep it so
+    //               "Save corrections" can emit a delete feedback record,
+    //               but it's hidden from the table
+    let rowState = [];
+    let rowCols = [];
+
     function renderResults(data) {
       resultsCard.classList.remove("hidden");
 
@@ -438,22 +480,212 @@
           </tr>`).join("")}</tbody>
       `;
 
+      // Seed the editable table. The original refs are frozen by a deep clone
+      // so comparisons catch every diff regardless of edit order.
       const rows = data.rows || [];
-      const cols = rows.length ? Object.keys(rows[0]) : [
+      rowCols = rows.length ? Object.keys(rows[0]) : [
         "StatementTitle","AccountType","Date","Amount","Payee","Description","Reference","CheckNumber",
       ];
-      const head = `<thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>`;
-      const body = rows.map(r => `<tr>${cols.map(c => {
-        const v = r[c] == null ? "" : String(r[c]);
-        const cls = c === "Amount"
-          ? `amount${v.startsWith("-") ? " neg" : ""}`
-          : c === "Description"
-            ? "desc"
-            : "";
-        return `<td class="${cls}">${escapeHtml(v)}</td>`;
-      }).join("")}</tr>`).join("");
-      $("rowsTable").innerHTML = head + `<tbody>${body}</tbody>`;
+      rowState = rows.map(r => ({
+        original: deepClone(r),
+        current: deepClone(r),
+        added: false, deleted: false,
+      }));
+      renderRowsTable();
+      updateEditStatus();
     }
+
+    function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
+
+    function renderRowsTable() {
+      const table = $("rowsTable");
+      const thead = `<thead><tr>${
+        rowCols.map(c => `<th>${escapeHtml(c)}</th>`).join("")
+      }<th class="row-actions"></th></tr></thead>`;
+
+      const trs = rowState.map((entry, i) => {
+        if (entry.deleted) return "";
+        const rowClass = entry.added ? "added" : (isDirty(entry) ? "edited" : "");
+        const cells = rowCols.map(c => cellEditor(c, entry.current[c] ?? "", i)).join("");
+        const actions = `<td class="row-actions">
+          <button title="Delete row" aria-label="Delete row" data-action="delete" data-i="${i}">✕</button>
+        </td>`;
+        return `<tr class="${rowClass}">${cells}${actions}</tr>`;
+      }).join("");
+
+      table.innerHTML = thead + `<tbody>${trs}</tbody>`;
+
+      // Wire up input handlers (delegated would be fine but there are few rows).
+      table.querySelectorAll("tbody input, tbody select").forEach(el => {
+        el.addEventListener("input", onCellEdit);
+        el.addEventListener("change", onCellEdit);
+      });
+      table.querySelectorAll('button[data-action="delete"]').forEach(el => {
+        el.addEventListener("click", () => onDeleteRow(Number(el.dataset.i)));
+      });
+    }
+
+    function cellEditor(colName, value, rowIdx) {
+      const v = value == null ? "" : String(value);
+      if (colName === "AccountType") {
+        const opts = ACCOUNT_TYPES
+          .filter(opt => opt.value)  // skip the "Auto-detect" placeholder
+          .map(opt => `<option value="${escapeAttr(opt.value)}" ${v === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`)
+          .join("");
+        return `<td><select data-i="${rowIdx}" data-col="${escapeAttr(colName)}">${opts}</select></td>`;
+      }
+      const extraClass = colName === "Amount"
+        ? `amount-col${v.startsWith("-") ? " amount-neg" : ""}`
+        : "";
+      return `<td class="${extraClass}">
+        <input type="text" value="${escapeAttr(v)}"
+               data-i="${rowIdx}" data-col="${escapeAttr(colName)}" />
+      </td>`;
+    }
+
+    function onCellEdit(e) {
+      const i = Number(e.target.dataset.i);
+      const col = e.target.dataset.col;
+      rowState[i].current[col] = e.target.value;
+      // Repaint this row's class so yellow-edited tint appears / disappears.
+      const tr = e.target.closest("tr");
+      if (tr) {
+        tr.classList.toggle("edited", !rowState[i].added && isDirty(rowState[i]));
+      }
+      // Amount cell sign colouring follows the current value.
+      if (col === "Amount") {
+        const td = e.target.closest("td");
+        if (td) td.classList.toggle("amount-neg", String(e.target.value).startsWith("-"));
+      }
+      updateEditStatus();
+    }
+
+    function onDeleteRow(i) {
+      const entry = rowState[i];
+      if (entry.added) {
+        // Locally-added row that wasn't saved yet: just drop it from state.
+        rowState.splice(i, 1);
+      } else {
+        entry.deleted = true;
+      }
+      renderRowsTable();
+      updateEditStatus();
+    }
+
+    $("addRowBtn").addEventListener("click", () => {
+      const blank = Object.fromEntries(rowCols.map(c => [c, ""]));
+      rowState.push({ original: null, current: blank, added: true, deleted: false });
+      renderRowsTable();
+      updateEditStatus();
+    });
+
+    function isDirty(entry) {
+      if (entry.added || entry.deleted) return true;
+      if (!entry.original) return false;
+      for (const c of rowCols) {
+        if (String(entry.original[c] ?? "") !== String(entry.current[c] ?? "")) return true;
+      }
+      return false;
+    }
+
+    function pendingFeedbackRecords() {
+      // Collect diffs the user has not yet persisted.
+      // Pipes source_file / source_bank / statement_title / account_type up to
+      // the record so the server can group feedback without parsing JSON.
+      const recs = [];
+      for (const e of rowState) {
+        if (e.added) {
+          recs.push({
+            action: "add",
+            original: null,
+            corrected: e.current,
+            source_file: e.current.source_file || null,
+            source_bank: e.current.source_bank || null,
+            statement_title: e.current.StatementTitle || null,
+            account_type: e.current.AccountType || null,
+          });
+        } else if (e.deleted) {
+          recs.push({
+            action: "delete",
+            original: e.original,
+            corrected: null,
+            source_file: e.original?.source_file || null,
+            source_bank: e.original?.source_bank || null,
+            statement_title: e.original?.StatementTitle || null,
+            account_type: e.original?.AccountType || null,
+          });
+        } else if (isDirty(e)) {
+          recs.push({
+            action: "edit",
+            original: e.original,
+            corrected: e.current,
+            source_file: e.current.source_file || e.original?.source_file || null,
+            source_bank: e.current.source_bank || e.original?.source_bank || null,
+            statement_title: e.current.StatementTitle || e.original?.StatementTitle || null,
+            account_type: e.current.AccountType || e.original?.AccountType || null,
+          });
+        }
+      }
+      return recs;
+    }
+
+    function currentRowsForExport() {
+      // Non-deleted rows, in their current state — for /export downloads.
+      return rowState.filter(e => !e.deleted).map(e => ({ ...e.current }));
+    }
+
+    function updateEditStatus() {
+      const recs = pendingFeedbackRecords();
+      const status = $("editStatus");
+      const btn = $("saveFeedbackBtn");
+      if (recs.length === 0) {
+        status.textContent = "No pending corrections.";
+        status.classList.remove("dirty");
+        btn.disabled = true;
+      } else {
+        const parts = [];
+        const byAction = { edit: 0, add: 0, delete: 0 };
+        recs.forEach(r => byAction[r.action]++);
+        if (byAction.edit) parts.push(`${byAction.edit} edited`);
+        if (byAction.add) parts.push(`${byAction.add} added`);
+        if (byAction.delete) parts.push(`${byAction.delete} deleted`);
+        status.textContent = parts.join(" · ") + " — unsaved";
+        status.classList.add("dirty");
+        btn.disabled = false;
+      }
+    }
+
+    // --- Save corrections -> /feedback -----------------------------------
+    $("saveFeedbackBtn").addEventListener("click", async () => {
+      const records = pendingFeedbackRecords();
+      if (records.length === 0) return;
+      $("saveFeedbackBtn").disabled = true;
+      setStatus(`Saving ${records.length} correction(s)...`);
+      try {
+        const res = await fetch("/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ records }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readError(res)}`);
+        const body = await res.json();
+        setStatus(`Saved ${body.saved} correction(s).`);
+        // After a successful save, re-baseline: every "current" becomes the
+        // new "original", deletions drop out, additions become saved rows.
+        rowState = rowState
+          .filter(e => !e.deleted)
+          .map(e => ({
+            original: deepClone(e.current),
+            current: deepClone(e.current),
+            added: false, deleted: false,
+          }));
+        renderRowsTable();
+        updateEditStatus();
+      } catch (e) {
+        setStatus(`Error: ${e.message || e}`, true);
+        $("saveFeedbackBtn").disabled = false;
+      }
+    });
 
     function cell(label, value, cls) {
       return `<div class="cell">
@@ -495,6 +727,10 @@
         { "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c]
       ));
     }
+
+    // For HTML attribute values — same as escapeHtml for our purposes, but
+    // named separately for clarity at callsites.
+    function escapeAttr(s) { return escapeHtml(s); }
   </script>
 </body>
 </html>

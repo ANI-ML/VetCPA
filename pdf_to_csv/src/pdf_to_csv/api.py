@@ -45,11 +45,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
+import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, Field
 
 from pdf_to_csv.account_type import AccountType
 from pdf_to_csv.docling_client import build_converter
+from pdf_to_csv.feedback_store import FeedbackRecord, FeedbackStore, default_db_path
 from pdf_to_csv.ingest import (
     IngestError,
     accepted_types_label,
@@ -71,6 +74,9 @@ async def lifespan(app: FastAPI):
     # built on demand so tests / non-OCR deployments don't pay for it.
     app.state.converter = None        # type: ignore[attr-defined]
     app.state.converter_ocr = None    # type: ignore[attr-defined]
+    # FeedbackStore lazy-initialises its SQLite file on first write, so
+    # building it at startup is safe even when the DB file doesn't exist yet.
+    app.state.feedback_store = FeedbackStore(default_db_path())  # type: ignore[attr-defined]
     yield
 
 
@@ -300,3 +306,73 @@ async def extract(
             "rows": df.to_dict(orient="records"),
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /export — download current (possibly edited) rows as CSV or Excel
+# ---------------------------------------------------------------------------
+
+class ExportRequest(BaseModel):
+    rows: list[dict[str, Any]] = Field(..., description="Rows to export, in canonical schema.")
+    format: Literal["csv", "excel"] = "csv"
+    filename: str = Field("transactions", description="Filename stem without extension.")
+
+
+@app.post("/export")
+async def export_rows(body: ExportRequest) -> Response:
+    """Render a user-supplied row list as CSV or Excel.
+
+    The front end uses this after the accountant edits rows in-browser, so
+    downloads reflect the corrected state instead of the raw pipeline output.
+    """
+    if not body.rows:
+        raise HTTPException(status_code=400, detail="No rows to export.")
+
+    df = pd.DataFrame(body.rows)
+    safe_stem = (body.filename or "transactions").strip() or "transactions"
+
+    if body.format == "csv":
+        buf = io.StringIO()
+        df.to_csv(buf, index=False)
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{safe_stem}.csv"'},
+        )
+
+    bbuf = io.BytesIO()
+    df.to_excel(bbuf, index=False, engine="openpyxl")
+    return Response(
+        content=bbuf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{safe_stem}.xlsx"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# /feedback — store + list user corrections
+# ---------------------------------------------------------------------------
+
+class FeedbackSubmission(BaseModel):
+    records: list[FeedbackRecord]
+
+
+@app.post("/feedback")
+async def submit_feedback(body: FeedbackSubmission) -> dict[str, Any]:
+    if not body.records:
+        raise HTTPException(status_code=400, detail="No feedback records submitted.")
+    ids = app.state.feedback_store.add_many(body.records)
+    return {"saved": len(ids), "ids": ids}
+
+
+@app.get("/feedback")
+async def list_feedback(
+    limit: int = Query(100, ge=1, le=1000,
+                       description="Max records to return (most recent first)."),
+) -> list[FeedbackRecord]:
+    return app.state.feedback_store.list_all(limit=limit)
+
+
+@app.get("/feedback/count")
+async def feedback_count() -> dict[str, int]:
+    return {"count": app.state.feedback_store.count()}

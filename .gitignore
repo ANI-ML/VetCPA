@@ -36,7 +36,8 @@ pdf_to_csv/out/
 *.xlsx
 !pdf_to_csv/tests/fixtures/*.csv
 
-# SQLite DBs (will appear once feedback layer ships)
+# SQLite DBs + the default feedback-store dir
 *.db
 *.sqlite
 *.sqlite3
+pdf_to_csv/data/
