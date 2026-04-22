@@ -406,6 +406,52 @@
     .edit-status.dirty { color: var(--accent); font-weight: 600; }
 
     /* ------------------------------------------------------------------ *
+     *  First-launch model-download banner
+     * ------------------------------------------------------------------ */
+    .model-banner {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 18px 22px;
+      margin-bottom: 16px;
+      display: flex; flex-direction: column; gap: 10px;
+      box-shadow: var(--shadow-sm);
+    }
+    .model-banner .title {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 15px; color: var(--text);
+    }
+    .model-banner .title .spinner {
+      border-color: var(--accent); border-top-color: transparent;
+      margin-right: 0;
+    }
+    .model-banner .sub {
+      color: var(--text-soft); font-size: 13px; margin-left: 22px;
+    }
+    .model-banner .bar-wrap {
+      height: 10px; border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+      overflow: hidden; margin-left: 22px;
+    }
+    .model-banner .bar {
+      height: 100%; width: 0%;
+      background: var(--accent);
+      border-radius: 999px;
+      transition: width 0.35s ease;
+    }
+    .model-banner .stats {
+      display: flex; gap: 14px; color: var(--muted);
+      font-size: 12px; font-variant-numeric: tabular-nums;
+      margin-left: 22px;
+    }
+    .model-banner.success {
+      background: var(--good-soft); border-color: var(--good);
+    }
+    .model-banner.success .title { color: var(--good); }
+    .model-banner.success .bar-wrap { background: color-mix(in srgb, var(--good) 20%, transparent); }
+    .model-banner.success .bar { background: var(--good); width: 100% !important; }
+
+    /* ------------------------------------------------------------------ *
      *  Footer + ANI.ML logo
      * ------------------------------------------------------------------ */
     footer {
@@ -450,6 +496,18 @@
         </button>
       </div>
     </header>
+
+    <!-- First-launch model-download banner. Hidden unless /models/status says we're mid-download. -->
+    <div class="model-banner hidden" id="modelBanner" role="status" aria-live="polite">
+      <div class="title"><span class="spinner" aria-hidden="true"></span><span id="modelTitle">Downloading OCR models…</span></div>
+      <div class="sub" id="modelSub">One-time setup. After this, VetCPA works fully offline.</div>
+      <div class="bar-wrap"><div class="bar" id="modelBar"></div></div>
+      <div class="stats">
+        <span id="modelStats">0 MB / ~1.5 GB</span>
+        <span id="modelPct">0%</span>
+        <span id="modelElapsed"></span>
+      </div>
+    </div>
 
     <div class="card">
       <label class="drop" id="drop">
@@ -738,6 +796,12 @@
       const n = state.entries.length;
       startProgress(`Uploading and extracting ${n} file${n === 1 ? "" : "s"}`);
 
+      // If the server hasn't cached Docling's models yet, this /extract
+      // call will spend several minutes pulling them from HuggingFace.
+      // Kick the banner poller into "downloading" mode so the user sees
+      // real bytes-downloaded progress instead of a bare spinner.
+      if (!modelsReady) startModelPolling({ downloading: true });
+
       try {
         const t0 = performance.now();
         const res = await fetch(buildUrl("json"), { method: "POST", body: buildFormData() });
@@ -748,11 +812,18 @@
         const data = await res.json();
         const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
         stopProgress();
+        // Extract succeeded, so models must be cached. Force the banner to
+        // its ready state and then tear the poller down — guards against
+        // cases where the cache is slightly smaller than our estimate.
+        modelsReady = true;
+        const final = await fetchModelStatus();
+        paintModelBanner({ ...(final || {}), ready: true }, { downloading: false });
         renderResults(data);
         const nRows = (data.rows || []).length;
         setStatus(`Extracted ${nRows} row${nRows === 1 ? "" : "s"} in ${elapsed}s.`);
       } catch (e) {
         stopProgress();
+        stopModelPolling();
         setStatus(`Error: ${e.message || e}`, true);
       } finally {
         submitBtn.disabled = state.entries.length === 0;
@@ -1089,6 +1160,102 @@
       statusEl.textContent = msg;
       statusEl.classList.toggle("err", !!isError);
     }
+
+    // ---------------------------------------------------------------------
+    // Model-download banner. Docling's ML weights (~1.5 GB) download from
+    // HuggingFace on first extraction; without this the UI would just sit
+    // there spinning for 3-5 minutes. We poll /models/status, show a
+    // progress bar based on cache-dir growth, and fade out once the
+    // server reports ready=true.
+    // ---------------------------------------------------------------------
+    const modelBanner = $("modelBanner");
+    const modelBar    = $("modelBar");
+    const modelTitle  = $("modelTitle");
+    const modelSub    = $("modelSub");
+    const modelStats  = $("modelStats");
+    const modelPct    = $("modelPct");
+    const modelElapsed= $("modelElapsed");
+
+    let modelPoll = null;
+    let modelPollStartedAt = null;
+    let modelsReady = false;
+
+    function fmtBytes(n) {
+      if (!Number.isFinite(n) || n <= 0) return "0 MB";
+      const mb = n / (1024 * 1024);
+      return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(0)} MB`;
+    }
+    function fmtSecs(s) {
+      if (s < 60) return `${Math.floor(s)}s`;
+      const m = Math.floor(s / 60), r = Math.floor(s % 60);
+      return `${m}m ${r}s`;
+    }
+
+    async function fetchModelStatus() {
+      try {
+        const r = await fetch("/models/status", { cache: "no-store" });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch { return null; }
+    }
+
+    function paintModelBanner(s, { downloading } = { downloading: false }) {
+      if (!s) return;
+      const total = s.estimated_total_bytes || 1;
+      const pct = Math.max(0, Math.min(100, s.percent || 0));
+      modelBar.style.width = `${pct}%`;
+      modelPct.textContent = `${s.ready ? 100 : pct}%`;
+      modelStats.textContent = `${fmtBytes(s.cache_bytes)} / ~${fmtBytes(total)}`;
+
+      if (s.ready) {
+        modelsReady = true;
+        modelBanner.classList.add("success");
+        modelTitle.textContent = "Models ready — all future extractions run fully offline.";
+        modelSub.textContent = s.bundled
+          ? "This build ships with models bundled — no download was needed."
+          : "One-time setup complete.";
+        modelElapsed.textContent = "";
+        // Hide the success state after a short breather so the UI isn't
+        // permanently cluttered on a healthy system.
+        setTimeout(() => modelBanner.classList.add("hidden"), 2500);
+        stopModelPolling();
+        return;
+      }
+
+      modelBanner.classList.remove("hidden", "success");
+      modelTitle.textContent = downloading
+        ? "Downloading OCR models…"
+        : "Preparing OCR models…";
+      modelSub.textContent = downloading
+        ? "First launch only (about 1.5 GB from HuggingFace). After this, VetCPA works fully offline."
+        : "Waiting for first extraction to trigger the one-time model download.";
+      if (modelPollStartedAt != null) {
+        const elapsed = (performance.now() - modelPollStartedAt) / 1000;
+        modelElapsed.textContent = `elapsed ${fmtSecs(elapsed)}`;
+      }
+    }
+
+    function startModelPolling({ downloading }) {
+      if (modelPoll) return;
+      if (modelPollStartedAt == null) modelPollStartedAt = performance.now();
+      const tick = async () => {
+        const s = await fetchModelStatus();
+        paintModelBanner(s, { downloading });
+      };
+      tick();                       // paint once immediately
+      modelPoll = setInterval(tick, 2000);
+    }
+    function stopModelPolling() {
+      if (modelPoll) { clearInterval(modelPoll); modelPoll = null; }
+    }
+
+    // Page-load probe: if models aren't there yet, surface the banner in
+    // "Preparing" mode before the user even clicks Extract, so the first
+    // thing they see is an explanation.
+    fetchModelStatus().then(s => {
+      if (s && s.ready) { modelsReady = true; return; }
+      if (s) paintModelBanner(s, { downloading: false });
+    });
 
     // Live progress: shows a spinner + elapsed-seconds counter while a
     // long-running fetch is in flight. Also surfaces progressively more

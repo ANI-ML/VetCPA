@@ -59,13 +59,37 @@ def default_db_path() -> Path:
     """Resolve the feedback DB path.
 
     Precedence:
-        1. PDF_TO_CSV_FEEDBACK_DB env var (explicit path)
-        2. ./data/feedback.db  (project-local; works out of the box)
+        1. PDF_TO_CSV_FEEDBACK_DB env var (explicit path, always wins)
+        2. Platform-appropriate app-data directory:
+           - macOS:   ~/Library/Application Support/VetCPA/data/feedback.db
+           - Windows: %LOCALAPPDATA%\\VetCPA\\data\\feedback.db
+           - Linux:   $XDG_DATA_HOME/VetCPA/data/feedback.db
+                      (or ~/.local/share/VetCPA/... if $XDG_DATA_HOME is unset)
+
+    Platform-specific paths matter because the uninstallers need to know
+    where to find (and delete) the feedback log. Shipping everything under
+    cwd/data/ made the location indeterminate when the app runs as a
+    double-clicked `.app` / `.exe`.
+
+    Docker deployments set PDF_TO_CSV_FEEDBACK_DB=/app/data/feedback.db so
+    the host-mounted volume still works unchanged.
     """
+    import sys
+
     override = os.environ.get("PDF_TO_CSV_FEEDBACK_DB")
     if override:
         return Path(override).expanduser()
-    return Path.cwd() / "data" / "feedback.db"
+
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "VetCPA"
+    elif sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        base = Path(local_app_data) / "VetCPA"
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        base = Path(xdg).expanduser() / "VetCPA" if xdg else Path.home() / ".local" / "share" / "VetCPA"
+
+    return base / "data" / "feedback.db"
 
 
 class FeedbackStore:

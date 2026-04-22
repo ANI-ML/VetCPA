@@ -44,30 +44,27 @@ Rows are sorted by `(StatementTitle, Date)`. Optional audit columns `source_bank
 
 ### 🍎 macOS — download and drag
 
-1. **[Download `VetCPA-0.1.0.dmg`](https://github.com/ANI-ML/VetCPA/releases/latest)** from the Releases page.
+1. **[Download `VetCPA-<version>.dmg`](https://github.com/ANI-ML/VetCPA/releases/latest)** from the Releases page.
 2. **Double-click the `.dmg`** to open it. A Finder window pops up with the **VetCPA** app and an **Applications** shortcut side by side.
 3. **Drag VetCPA into Applications.** Eject the disk image.
 4. **Launch from Applications or Launchpad.** Your browser opens automatically to the VetCPA UI.
 
-> **First time only:** macOS will say "VetCPA cannot be opened because the developer cannot be verified." This is because we haven't paid for Apple's code-signing program yet. **Right-click VetCPA → Open → Open.** Do this once; every later launch is a normal double-click.
+> **First time only:** macOS will say "VetCPA cannot be opened because the developer cannot be verified." **Right-click VetCPA → Open → Open.** Do this once; every later launch is a normal double-click.
 
 That's it. Start dragging PDFs or phone photos onto the drop zone.
 
-**What happens on first use:** VetCPA downloads ~2 GB of OCR models from HuggingFace the first time you extract a statement. This takes a few minutes and happens once per machine. Every launch after that is fully offline — no network needed.
+### 🪟 Windows — download and run
 
-### 🪟 Windows — build from source
+1. **[Download `VetCPA-windows-<version>.zip`](https://github.com/ANI-ML/VetCPA/releases/latest)** from the Releases page.
+2. **Right-click the zip → Extract All…** (or use your preferred unzip tool). You'll get a `VetCPA\` folder containing `VetCPA.exe` plus support files.
+3. **Move the `VetCPA\` folder** somewhere permanent (e.g. `C:\Users\<you>\Apps\VetCPA`).
+4. **Double-click `VetCPA.exe`.** Your browser opens automatically to the VetCPA UI.
 
-A pre-built Windows installer isn't in this release yet. If you have a Windows PC with Python 3.11:
+> **First time only:** Windows SmartScreen will warn about an unrecognised app. Click **More info → Run anyway**. Later launches are unprompted.
 
-```powershell
-git clone https://github.com/ANI-ML/VetCPA.git
-cd VetCPA\pdf_to_csv
-py -3.11 -m venv .venv
-.\.venv\Scripts\pip install -e ".[dev,bundle]"
-powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
-```
+### First-run download (both platforms)
 
-The build lands in `dist\VetCPA\`. Double-click `VetCPA.exe` to launch. Windows SmartScreen will ask for confirmation on first run — click **More info** → **Run anyway**.
+On first use, VetCPA downloads ~1.5 GB of OCR models from HuggingFace. This takes a few minutes and happens **once per machine**. You'll see a progress bar at the top of the UI the entire time — no guessing whether the app is frozen. Every launch after that is fully offline.
 
 ### 🐳 Docker — for devs, team servers, EC2
 
@@ -86,6 +83,53 @@ What persists between restarts:
 - `vetcpa-models` named volume — the downloaded OCR models (~2 GB, one-time)
 
 EC2 sizing floor: **t3.medium** (2 vCPU, 4 GB RAM).
+
+---
+
+## Uninstall
+
+Cleanly removes VetCPA **and** the ~2 GB of OCR models it downloaded. Everything shows what it's about to delete and asks for confirmation first.
+
+### 🍎 macOS
+
+Paste this in Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ANI-ML/VetCPA/main/pdf_to_csv/scripts/uninstall_macos.sh | bash
+```
+
+What it removes:
+
+| Path | What it is |
+| --- | --- |
+| `/Applications/VetCPA.app` | the app |
+| `~/Library/Application Support/VetCPA/` | feedback database |
+| `~/.cache/docling/` | OCR models (~1.5 GB) |
+
+What it doesn't touch: `~/.cache/huggingface/` (shared with other HF apps) and the `.dmg` you originally downloaded.
+
+### 🪟 Windows
+
+Paste this in PowerShell:
+
+```powershell
+iwr https://raw.githubusercontent.com/ANI-ML/VetCPA/main/pdf_to_csv/scripts/uninstall_windows.ps1 -OutFile uninstall.ps1 ; powershell -ExecutionPolicy Bypass -File .\uninstall.ps1 ; Remove-Item uninstall.ps1
+```
+
+What it removes:
+
+| Path | What it is |
+| --- | --- |
+| `%LOCALAPPDATA%\VetCPA\` | feedback database |
+| `%USERPROFILE%\.cache\docling\` | OCR models (~1.5 GB) |
+
+Then manually delete the extracted `VetCPA\` folder (wherever you unzipped it). Or run the script with `-AppPath '<path>'` to have it do that too:
+
+```powershell
+.\uninstall.ps1 -AppPath 'C:\Users\<you>\Apps\VetCPA'
+```
+
+Both scripts accept `-y` / `-Yes` to skip the confirmation prompt for scripted use.
 
 ---
 

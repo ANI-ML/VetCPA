@@ -59,6 +59,7 @@ from pdf_to_csv.ingest import (
     is_supported,
     normalize_for_docling,
 )
+from pdf_to_csv.model_status import get_cached_status
 from pdf_to_csv.pipeline import PdfJob, extract_transactions_from_many
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -116,6 +117,18 @@ def index() -> FileResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/models/status")
+def models_status() -> dict[str, Any]:
+    """First-launch model-download progress for the UI's splash banner.
+
+    Returns cache-dir byte totals + a coarse "ready" flag. The front end
+    polls this during the first extraction to show a progress bar so the
+    user doesn't think the app has frozen. When `DOCLING_ARTIFACTS_PATH`
+    is set (fully-offline bundles), `ready` is always True.
+    """
+    return get_cached_status().to_dict()
 
 
 # ---------------------------------------------------------------------------

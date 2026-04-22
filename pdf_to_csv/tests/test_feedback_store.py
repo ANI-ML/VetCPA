@@ -75,9 +75,26 @@ def test_default_db_path_honors_env_override(monkeypatch, tmp_path: Path) -> Non
     assert default_db_path() == override
 
 
-def test_default_db_path_falls_back_to_cwd_data_dir(monkeypatch, tmp_path: Path) -> None:
+def test_default_db_path_uses_platform_app_data(monkeypatch, tmp_path: Path) -> None:
+    """Without the env override, default_db_path picks a platform-appropriate
+    location so uninstallers know where to look.
+    """
+    import sys
+
     from pdf_to_csv.feedback_store import default_db_path
 
     monkeypatch.delenv("PDF_TO_CSV_FEEDBACK_DB", raising=False)
-    monkeypatch.chdir(tmp_path)
-    assert default_db_path() == tmp_path / "data" / "feedback.db"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+    if sys.platform == "darwin":
+        expected = home / "Library" / "Application Support" / "VetCPA" / "data" / "feedback.db"
+    elif sys.platform == "win32":
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+        expected = Path(str(tmp_path / "LocalAppData")) / "VetCPA" / "data" / "feedback.db"
+    else:
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        expected = home / ".local" / "share" / "VetCPA" / "data" / "feedback.db"
+
+    assert default_db_path() == expected
