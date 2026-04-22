@@ -1,0 +1,8 @@
+docling>=2.0.0
+pandas>=2.2
+openpyxl>=3.1
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+typer>=0.12
+pydantic>=2.6

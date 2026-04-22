@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pdf-to-csv — VetCPA</title>
+  <style>
+    :root {
+      --bg: #f7f7f8;
+      --card: #ffffff;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --accent: #d4212d;
+      --accent-ink: #ffffff;
+      --good: #047857;
+      --bad: #b91c1c;
+      --hover: #fef2f2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .container { max-width: 960px; margin: 32px auto; padding: 0 16px; }
+    header h1 { margin: 0; font-size: 22px; }
+    header p { color: var(--muted); margin: 4px 0 24px; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    /* Drop zone */
+    .drop {
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 40px 16px;
+      text-align: center;
+      color: var(--muted);
+      background: var(--card);
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease;
+    }
+    .drop.dragover { background: var(--hover); border-color: var(--accent); color: var(--ink); }
+    .drop strong { color: var(--ink); }
+    .drop input[type="file"] { display: none; }
+
+    /* Selected files list */
+    .files { margin: 12px 0 0; padding: 0; list-style: none; }
+    .files li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-top: 6px;
+      background: #fafafa;
+    }
+    .files .size { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .files button {
+      border: none; background: transparent; color: var(--muted);
+      cursor: pointer; font-size: 16px; padding: 0 4px;
+    }
+    .files button:hover { color: var(--bad); }
+
+    /* Options */
+    .options { display: flex; gap: 20px; flex-wrap: wrap; }
+    .options label { display: flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
+    .options input { margin: 0; }
+
+    /* Actions */
+    .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    button.primary {
+      background: var(--accent); color: var(--accent-ink);
+      border: none; padding: 10px 18px; border-radius: 6px;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.secondary {
+      background: var(--card); color: var(--ink);
+      border: 1px solid var(--border); padding: 10px 14px;
+      border-radius: 6px; cursor: pointer; font-size: 14px;
+    }
+    button.secondary:hover { background: #f3f4f6; }
+
+    /* Status area */
+    .status { margin-top: 8px; color: var(--muted); min-height: 20px; }
+    .status.err { color: var(--bad); }
+
+    /* Summary */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .summary-grid .cell {
+      background: #f9fafb; border: 1px solid var(--border);
+      border-radius: 6px; padding: 10px 12px;
+    }
+    .summary-grid .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .summary-grid .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* Per-file table */
+    table.perfile { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    table.perfile th, table.perfile td {
+      border-bottom: 1px solid var(--border);
+      padding: 6px 8px; text-align: left;
+    }
+    table.perfile th { color: var(--muted); font-weight: 600; }
+    table.perfile .ok { color: var(--good); }
+    table.perfile .err { color: var(--bad); }
+
+    /* Results table */
+    .rows-wrap { max-height: 480px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+    table.rows { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.rows th, table.rows td {
+      border-bottom: 1px solid var(--border);
+      padding: 8px 10px; text-align: left; vertical-align: top;
+      white-space: nowrap;
+    }
+    table.rows td.desc { white-space: normal; max-width: 380px; }
+    table.rows td.amount { text-align: right; font-variant-numeric: tabular-nums; }
+    table.rows td.amount.neg { color: var(--bad); }
+    table.rows thead th { position: sticky; top: 0; background: #f9fafb; color: var(--muted); }
+
+    .hidden { display: none !important; }
+    .hint { color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>pdf-to-csv</h1>
+      <p>Drop bank/credit-card statement PDFs to extract transactions into a unified CSV.</p>
+    </header>
+
+    <div class="card">
+      <label class="drop" id="drop">
+        <input type="file" id="fileInput" multiple accept="application/pdf,.pdf" />
+        <div>
+          <div><strong>Drop PDFs here</strong> or click to browse</div>
+          <div class="hint">One or more statements. Accepted: .pdf</div>
+        </div>
+      </label>
+      <ul class="files" id="fileList"></ul>
+    </div>
+
+    <div class="card">
+      <div class="options">
+        <label><input type="checkbox" id="optDedupe" checked /> Dedupe duplicate rows across files</label>
+        <label><input type="checkbox" id="optIncludeSource" /> Include source columns (audit)</label>
+        <label><input type="checkbox" id="optOcr" /> Enable OCR (for scanned PDFs)</label>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="submitBtn" disabled>Extract transactions</button>
+      <span class="status" id="status"></span>
+    </div>
+
+    <div class="card hidden" id="resultsCard">
+      <h2 style="margin-top:0;font-size:16px;">Results</h2>
+      <div class="summary-grid" id="summaryGrid"></div>
+      <div id="byParser" class="hint" style="margin-bottom:12px;"></div>
+      <table class="perfile" id="perFile"></table>
+
+      <div class="actions" style="margin:16px 0 12px;">
+        <button class="secondary" id="downloadCsvBtn">Download CSV</button>
+        <button class="secondary" id="downloadExcelBtn">Download Excel</button>
+      </div>
+
+      <div class="rows-wrap">
+        <table class="rows" id="rowsTable"></table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    "use strict";
+
+    const state = { files: [] };
+
+    const $ = (id) => document.getElementById(id);
+    const drop = $("drop");
+    const fileInput = $("fileInput");
+    const fileList = $("fileList");
+    const submitBtn = $("submitBtn");
+    const statusEl = $("status");
+    const resultsCard = $("resultsCard");
+
+    // --- File selection + drag and drop -----------------------------------
+    function addFiles(list) {
+      for (const f of list) {
+        if (!f.name.toLowerCase().endsWith(".pdf")) continue;
+        // Skip duplicates (by name + size).
+        if (state.files.some((g) => g.name === f.name && g.size === f.size)) continue;
+        state.files.push(f);
+      }
+      renderFiles();
+    }
+    function removeAt(idx) { state.files.splice(idx, 1); renderFiles(); }
+    function renderFiles() {
+      fileList.innerHTML = "";
+      for (let i = 0; i < state.files.length; i++) {
+        const f = state.files[i];
+        const li = document.createElement("li");
+        li.innerHTML = `<span>${escapeHtml(f.name)}</span>
+          <span class="size">${formatSize(f.size)}</span>
+          <button aria-label="Remove" title="Remove">✕</button>`;
+        li.querySelector("button").addEventListener("click", (e) => {
+          e.preventDefault(); e.stopPropagation(); removeAt(i);
+        });
+        fileList.appendChild(li);
+      }
+      submitBtn.disabled = state.files.length === 0;
+    }
+
+    fileInput.addEventListener("change", (e) => addFiles(e.target.files));
+
+    ["dragenter", "dragover"].forEach((ev) =>
+      drop.addEventListener(ev, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        drop.classList.add("dragover");
+      })
+    );
+    ["dragleave", "drop"].forEach((ev) =>
+      drop.addEventListener(ev, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        drop.classList.remove("dragover");
+      })
+    );
+    drop.addEventListener("drop", (e) => {
+      if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+    });
+
+    // --- Submit -----------------------------------------------------------
+    submitBtn.addEventListener("click", async () => {
+      if (state.files.length === 0) return;
+      setStatus(`Uploading and extracting ${state.files.length} PDF(s)...`);
+      submitBtn.disabled = true;
+
+      const url = buildUrl("json");
+      const form = new FormData();
+      for (const f of state.files) form.append("files", f, f.name);
+
+      try {
+        const t0 = performance.now();
+        const res = await fetch(url, { method: "POST", body: form });
+        if (!res.ok) {
+          const detail = await readError(res);
+          throw new Error(`HTTP ${res.status}: ${detail}`);
+        }
+        const data = await res.json();
+        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+        renderResults(data);
+        setStatus(`Done in ${elapsed}s.`);
+      } catch (e) {
+        setStatus(`Error: ${e.message || e}`, true);
+      } finally {
+        submitBtn.disabled = state.files.length === 0;
+      }
+    });
+
+    // --- Downloads --------------------------------------------------------
+    $("downloadCsvBtn").addEventListener("click", () => downloadAs("csv"));
+    $("downloadExcelBtn").addEventListener("click", () => downloadAs("excel"));
+
+    async function downloadAs(format) {
+      if (state.files.length === 0) return;
+      setStatus(`Building ${format.toUpperCase()}...`);
+      const url = buildUrl(format);
+      const form = new FormData();
+      for (const f of state.files) form.append("files", f, f.name);
+      try {
+        const res = await fetch(url, { method: "POST", body: form });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readError(res)}`);
+        const blob = await res.blob();
+        const filename = format === "excel" ? "transactions.xlsx" : "transactions.csv";
+        triggerDownload(blob, filename);
+        setStatus(`Downloaded ${filename}.`);
+      } catch (e) {
+        setStatus(`Error: ${e.message || e}`, true);
+      }
+    }
+
+    function triggerDownload(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+    }
+
+    // --- Rendering --------------------------------------------------------
+    function renderResults(data) {
+      resultsCard.classList.remove("hidden");
+
+      const s = data.summary || {};
+      $("summaryGrid").innerHTML = `
+        ${cell("PDFs processed", s.files_processed)}
+        ${cell("PDFs failed", s.files_failed, s.files_failed > 0 ? "err" : "")}
+        ${cell("Rows extracted", s.rows_extracted)}
+        ${cell("After dedup", s.rows_after_dedup)}
+      `;
+
+      const byParserStr = Object.entries(s.by_parser || {})
+        .map(([k, v]) => `${k}: ${v}`).join(" · ");
+      $("byParser").textContent = byParserStr ? `By parser: ${byParserStr}` : "";
+
+      const pf = $("perFile");
+      pf.innerHTML = `
+        <thead><tr><th>File</th><th>Parser</th><th>Rows</th><th>Status</th></tr></thead>
+        <tbody>${(data.files || []).map(f => `
+          <tr>
+            <td>${escapeHtml(f.filename || "")}</td>
+            <td>${escapeHtml(f.parser || "—")}</td>
+            <td>${f.rows ?? 0}</td>
+            <td class="${f.error ? "err" : "ok"}">${f.error ? escapeHtml(f.error) : "ok"}</td>
+          </tr>`).join("")}</tbody>
+      `;
+
+      const rows = data.rows || [];
+      const cols = rows.length ? Object.keys(rows[0]) : ["Date","Amount","Payee","Description","Reference","CheckNumber"];
+      const head = `<thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>`;
+      const body = rows.map(r => `<tr>${cols.map(c => {
+        const v = r[c] == null ? "" : String(r[c]);
+        const cls = c === "Amount"
+          ? `amount${v.startsWith("-") ? " neg" : ""}`
+          : c === "Description"
+            ? "desc"
+            : "";
+        return `<td class="${cls}">${escapeHtml(v)}</td>`;
+      }).join("")}</tr>`).join("");
+      $("rowsTable").innerHTML = head + `<tbody>${body}</tbody>`;
+    }
+
+    function cell(label, value, cls) {
+      return `<div class="cell">
+        <div class="label">${escapeHtml(label)}</div>
+        <div class="value ${cls || ""}">${value ?? "—"}</div>
+      </div>`;
+    }
+
+    // --- Helpers ----------------------------------------------------------
+    function buildUrl(format) {
+      const params = new URLSearchParams();
+      params.set("format", format);
+      if ($("optIncludeSource").checked) params.set("include_source", "true");
+      if (!$("optDedupe").checked) params.set("dedupe", "false");
+      if ($("optOcr").checked) params.set("ocr", "true");
+      return `/extract?${params.toString()}`;
+    }
+
+    async function readError(res) {
+      try {
+        const j = await res.json();
+        return j.detail || JSON.stringify(j);
+      } catch { return res.statusText; }
+    }
+
+    function setStatus(msg, isError) {
+      statusEl.textContent = msg;
+      statusEl.classList.toggle("err", !!isError);
+    }
+
+    function formatSize(n) {
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+      return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => (
+        { "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c]
+      ));
+    }
+  </script>
+</body>
+</html>

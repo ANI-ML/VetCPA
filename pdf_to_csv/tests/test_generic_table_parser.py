@@ -1,0 +1,160 @@
+"""Tests for the universal fallback parser (`GenericTableParser`).
+
+We feed it synthetic tables that mimic several bank-like layouts to confirm it
+can recognize date/amount/description columns by *cell content* regardless of
+header naming — and that it rejects non-transaction tables (summaries, KV
+blocks) instead of hallucinating rows from them.
+"""
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pandas as pd
+
+from pdf_to_csv.docling_client import ExtractedTable, ParsedPDF
+from pdf_to_csv.parsers.generic_table import (
+    GenericTableParser,
+    _try_parse_amount,
+    _try_parse_date,
+)
+
+
+def _table(headers: list[str], rows: list[list[str]], page: int = 1) -> ExtractedTable:
+    df = pd.DataFrame(rows, columns=headers)
+    return ExtractedTable(
+        page_number=page,
+        headers=headers,
+        rows=df.astype(str).values.tolist(),
+        dataframe=df,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cell primitives
+# ---------------------------------------------------------------------------
+
+def test_try_parse_date_supports_common_formats() -> None:
+    assert _try_parse_date("2025-03-27") is not None
+    assert _try_parse_date("03/27/2025") is not None
+    assert _try_parse_date("03-27-2025") is not None
+    assert _try_parse_date("27 Mar 2025") is not None
+    assert _try_parse_date("March 27, 2025") is not None
+
+
+def test_try_parse_date_short_form_requires_fallback_year() -> None:
+    assert _try_parse_date("Mar 27") is None
+    assert _try_parse_date("Mar 27", fallback_year=2025).isoformat() == "2025-03-27"
+
+
+def test_try_parse_amount_handles_all_sign_conventions() -> None:
+    assert _try_parse_amount("37.00") == Decimal("37.00")
+    assert _try_parse_amount("-37.00") == Decimal("-37.00")
+    assert _try_parse_amount("37.00-") == Decimal("-37.00")
+    assert _try_parse_amount("(37.00)") == Decimal("-37.00")
+    assert _try_parse_amount("$1,500.00") == Decimal("1500.00")
+    assert _try_parse_amount("1,500.00-") == Decimal("-1500.00")
+
+
+def test_try_parse_amount_rejects_non_numeric() -> None:
+    assert _try_parse_amount("") is None
+    assert _try_parse_amount("not a number") is None
+    assert _try_parse_amount("AMT 10.36 USD") is None
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: unknown bank with ISO date + leading-minus amounts
+# ---------------------------------------------------------------------------
+
+def test_parses_iso_date_signed_amount_layout() -> None:
+    # "FakeBank" uses ISO dates, leading-minus for credits, amount on the right.
+    table = _table(
+        ["Date", "Memo", "Credit/Debit"],
+        [
+            ["2025-03-27", "STARBUCKS    TORONTO ON", "-4.25"],
+            ["2025-03-28", "UBER EATS   SAN FRANCISCO CA", "-23.50"],
+            ["2025-04-01", "PAYMENT RECEIVED", "500.00"],
+            ["2025-04-03", "SHELL GAS STATION    TORONTO ON", "-60.00"],
+        ],
+    )
+    parsed = ParsedPDF(tables=[table], text="FakeBank Statement 2025")
+
+    txns = GenericTableParser().extract_transactions(parsed)
+
+    assert len(txns) == 4
+    assert txns[0].Date.isoformat() == "2025-03-27"
+    assert txns[0].Amount == Decimal("-4.25")
+    assert txns[0].Payee == "STARBUCKS"
+    # Payment-received row keeps its positive sign (bank's convention, not ours).
+    assert txns[2].Amount == Decimal("500.00")
+
+
+def test_parses_parenthesized_credits_layout() -> None:
+    # Another common convention: accounting parentheses for negatives.
+    table = _table(
+        ["Txn Date", "Description", "Amount"],
+        [
+            ["03/27/2025", "STARBUCKS", "(4.25)"],
+            ["03/28/2025", "PAYROLL DEPOSIT", "2,500.00"],
+            ["03/29/2025", "SHELL", "(60.00)"],
+        ],
+    )
+    parsed = ParsedPDF(tables=[table], text="")
+
+    txns = GenericTableParser().extract_transactions(parsed)
+
+    assert len(txns) == 3
+    assert txns[0].Amount == Decimal("-4.25")
+    assert txns[1].Amount == Decimal("2500.00")
+    assert txns[2].Amount == Decimal("-60.00")
+
+
+def test_parses_short_dates_using_statement_period_year_hint() -> None:
+    # Short-form dates need a fallback year pulled from the document text.
+    table = _table(
+        ["Date", "Detail", "Amount"],
+        [
+            ["Mar 27", "STARBUCKS", "4.25"],
+            ["Apr 1", "SHELL", "60.00"],
+        ],
+    )
+    parsed = ParsedPDF(tables=[table], text="Statement Date Apr 27, 2025")
+
+    txns = GenericTableParser().extract_transactions(parsed)
+
+    assert [t.Date.isoformat() for t in txns] == ["2025-03-27", "2025-04-01"]
+
+
+def test_skips_non_transaction_tables() -> None:
+    # Summary-style KV table — no amount column, should be ignored entirely.
+    summary = _table(
+        ["Field", "Value"],
+        [
+            ["New Balance", "$5,894.95"],
+            ["Credit limit", "$10,000.00"],
+            ["Available credit", "$4,105.05"],
+        ],
+    )
+    # A column that's mostly text, no date/amount consistency.
+    rewards = _table(
+        ["Points earned (1.5x earn rate**)", "2,583"],
+        [["Points earned _ Total", "2,583"]],
+    )
+    parsed = ParsedPDF(tables=[summary, rewards], text="Something")
+    assert GenericTableParser().extract_transactions(parsed) == []
+
+
+def test_rows_tagged_with_source_bank() -> None:
+    table = _table(
+        ["Date", "Description", "Amount"],
+        [["2025-03-27", "STARBUCKS", "-4.25"], ["2025-03-28", "SHELL", "-60.00"]],
+    )
+    txns = GenericTableParser().extract_transactions(ParsedPDF(tables=[table], text=""))
+    assert all(t.source_bank == "generic_table" for t in txns)
+
+
+def test_is_match_is_universal_fallback() -> None:
+    p = GenericTableParser()
+    # Accepts any PDF that had at least one table.
+    assert p.is_match(ParsedPDF(tables=[_table(["A", "B"], [["1", "2"]])], text=""))
+    # Rejects PDFs with no tables at all (no signal to work from).
+    assert not p.is_match(ParsedPDF(tables=[], text=""))
