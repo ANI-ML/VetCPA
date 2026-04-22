@@ -1,0 +1,127 @@
+name: Build & attach release artifacts
+
+# When a v* tag is pushed (e.g. `git tag v0.1.1 && git push --tags`), build
+# macOS and Windows bundles in parallel and attach them to the matching
+# GitHub release. Also runnable on-demand from the Actions tab so we can
+# retroactively build artifacts for an existing tag (e.g. v0.1.0, which
+# was cut before this workflow existed).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.1.0). Leave blank on tag push."
+        required: false
+        default: ""
+
+permissions:
+  contents: write    # needed by the release-upload step
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Windows — produces VetCPA-windows-<version>.zip
+  # ---------------------------------------------------------------------
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: pdf_to_csv
+
+    steps:
+      - name: Check out repo (at the right tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pdf_to_csv/pyproject.toml
+
+      - name: Create venv + install deps
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python -m pip install --upgrade pip
+          .\.venv\Scripts\pip install -e ".[dev,bundle]"
+
+      - name: Build VetCPA.exe via PyInstaller
+        env:
+          VETCPA_BUNDLE_MODELS: "0"   # models download on first launch
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
+
+      - name: Resolve release version from tag
+        id: version
+        run: |
+          $ref = "${{ github.event.inputs.tag || github.ref_name }}"
+          $ver = $ref -replace '^v',''
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          echo "tag=$ref"     >> $env:GITHUB_OUTPUT
+
+      - name: Zip dist\VetCPA\ into a single downloadable
+        run: |
+          $zipName = "VetCPA-windows-${{ steps.version.outputs.version }}.zip"
+          Compress-Archive -Path "dist\VetCPA\*" -DestinationPath "dist\$zipName" -Force
+          Write-Host "Created dist\$zipName"
+
+      - name: Attach to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: pdf_to_csv/dist/VetCPA-windows-*.zip
+          fail_on_unmatched_files: true
+
+  # ---------------------------------------------------------------------
+  # macOS — produces VetCPA-<version>.dmg
+  # Kept in the same workflow so future releases stay in sync.
+  # v0.1.0's DMG was uploaded manually; this job will happily re-upload
+  # the same artifact (softprops/action-gh-release overwrites by name).
+  # ---------------------------------------------------------------------
+  build-macos:
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: pdf_to_csv
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pdf_to_csv/pyproject.toml
+
+      - name: Create venv + install deps
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev,bundle]"
+
+      - name: Build VetCPA.app
+        run: ./scripts/build_macos.sh
+
+      - name: Wrap as .dmg
+        run: ./scripts/make_dmg.sh
+
+      - name: Resolve release version from tag
+        id: version
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          echo "tag=$REF"         >> "$GITHUB_OUTPUT"
+
+      - name: Attach to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: pdf_to_csv/dist/VetCPA-*.dmg
+          fail_on_unmatched_files: true
